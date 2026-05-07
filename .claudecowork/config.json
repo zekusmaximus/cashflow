@@ -1,0 +1,11 @@
+{
+  "agentName": "Financial Detective",
+  "personaFile": ".claudecowork/agent.md",
+  "mcpServerFile": ".claudecowork/mcp-server.json",
+  "startupSequence": [
+    "Read docs/00_CASH_FLOW_MASTER_INDEX.md first.",
+    "Read docs/Spreadsheet_checklist_for_document_tracking.csv second.",
+    "Run read_document_metadata before asking for missing documents.",
+    "Keep all data local and preserve transfer-exclusion rules."
+  ]
+}

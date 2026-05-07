@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Capabilities for the main Liquidity Gate window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "fs:default",
+    "fs:allow-localdata-read-recursive",
+    "fs:allow-localdata-write-recursive",
+    "sql:default",
+    "sql:allow-execute"
+  ]
+}
