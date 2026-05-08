@@ -119,6 +119,8 @@ class ReconcileTransactionsResult(BaseModel):
     transaction_count: int
     inserted: int
     updated: int
+    would_insert: int = 0
+    would_update: int = 0
     dry_run: bool
     account_keys: list[str]
 

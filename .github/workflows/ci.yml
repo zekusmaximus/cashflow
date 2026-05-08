@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    name: Frontend (TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Vitest
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  python:
+    name: Python (MCP server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install server dependencies
+        working-directory: server
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[test]
+
+      - name: Compile check
+        run: python -m compileall -q server/src
+
+      - name: Import smoke check
+        env:
+          PYTHONPATH: server/src
+        run: python -c "import liquidity_gate_mcp.server"
+
+      - name: Pytest
+        working-directory: server
+        run: python -m pytest

@@ -17,7 +17,14 @@ class DatabaseManager:
         self.schema_path = schema_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def connect(self) -> sqlite3.Connection:
+    def connect(self, *, read_only: bool = False) -> sqlite3.Connection:
+        if read_only:
+            uri = f"file:{self.database_path}?mode=ro"
+            connection = sqlite3.connect(uri, uri=True)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only = 1")
+            return connection
+
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
@@ -69,47 +76,32 @@ class DatabaseManager:
                 )
 
     def reconcile_transactions(self, request: ReconcileTransactionsRequest) -> ReconcileTransactionsResult:
+        if request.dry_run:
+            return self._reconcile_dry_run(request)
+        return self._reconcile_commit(request)
+
+    def _reconcile_commit(self, request: ReconcileTransactionsRequest) -> ReconcileTransactionsResult:
         batch_id = str(uuid4())
         inserted = 0
         updated = 0
         account_keys = sorted({transaction.account.source_key for transaction in request.transactions})
 
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             cursor = connection.cursor()
-
-            if not request.dry_run:
-                cursor.execute(
-                    "INSERT INTO import_batches (id, source_name, parser_version, imported_at, raw_payload) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        batch_id,
-                        request.source_name,
-                        request.parser_version,
-                        datetime.now(timezone.utc).isoformat(),
-                        request.model_dump_json(),
-                    ),
-                )
+            cursor.execute(
+                "INSERT INTO import_batches (id, source_name, parser_version, imported_at, raw_payload) VALUES (?, ?, ?, ?, ?)",
+                (
+                    batch_id,
+                    request.source_name,
+                    request.parser_version,
+                    datetime.now(timezone.utc).isoformat(),
+                    request.model_dump_json(),
+                ),
+            )
 
             for transaction in request.transactions:
-                cursor.execute(
-                    """
-                    INSERT INTO accounts (id, institution, account_name, account_type, owner, currency)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                      institution = excluded.institution,
-                      account_name = excluded.account_name,
-                      account_type = excluded.account_type,
-                      owner = excluded.owner,
-                      currency = excluded.currency
-                    """,
-                    (
-                        transaction.account.source_key,
-                        transaction.account.institution,
-                        transaction.account.account_name,
-                        transaction.account.account_type,
-                        transaction.account.owner,
-                        transaction.account.currency,
-                    ),
-                )
+                self._upsert_account(cursor, transaction)
 
                 amount = self._normalize_amount(transaction.amount, transaction.direction)
                 transaction_id = self._find_existing_transaction_id(
@@ -117,90 +109,21 @@ class DatabaseManager:
                     transaction.source_document_name,
                     transaction.source_record_key,
                 )
-
-                payload = (
-                    transaction.account.source_key,
-                    batch_id,
-                    transaction.source_record_key,
-                    transaction.source_document_name,
-                    transaction.occurred_on.isoformat(),
-                    transaction.posted_on.isoformat() if transaction.posted_on else None,
-                    transaction.description_raw,
-                    transaction.merchant_normalized,
-                    amount,
-                    transaction.direction,
-                    transaction.account.currency,
-                    transaction.primary_category,
-                    transaction.subcategory,
-                    transaction.household_role,
-                    transaction.lifecycle,
-                    transaction.transfer_group_key,
-                    transaction.statement_period,
-                    json.dumps(transaction.metadata),
-                )
+                payload = self._transaction_payload(transaction, batch_id, amount)
 
                 if transaction_id:
                     updated += 1
-                    if not request.dry_run:
-                        cursor.execute(
-                            """
-                            UPDATE transactions
-                            SET account_id = ?,
-                                import_batch_id = ?,
-                                source_record_key = ?,
-                                source_document_name = ?,
-                                occurred_on = ?,
-                                posted_on = ?,
-                                description_raw = ?,
-                                merchant_normalized = ?,
-                                amount = ?,
-                                direction = ?,
-                                currency = ?,
-                                primary_category = ?,
-                                subcategory = ?,
-                                household_role = ?,
-                                lifecycle = ?,
-                                transfer_group_key = ?,
-                                statement_period = ?,
-                                metadata_json = ?
-                            WHERE id = ?
-                            """,
-                            (*payload, transaction_id),
-                        )
+                    cursor.execute(self._update_transaction_sql(), (*payload, transaction_id))
                 else:
                     inserted += 1
-                    if not request.dry_run:
-                        cursor.execute(
-                            """
-                            INSERT INTO transactions (
-                              id,
-                              account_id,
-                              import_batch_id,
-                              source_record_key,
-                              source_document_name,
-                              occurred_on,
-                              posted_on,
-                              description_raw,
-                              merchant_normalized,
-                              amount,
-                              direction,
-                              currency,
-                              primary_category,
-                              subcategory,
-                              household_role,
-                              lifecycle,
-                              transfer_group_key,
-                              statement_period,
-                              metadata_json
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (str(uuid4()), *payload),
-                        )
+                    cursor.execute(self._insert_transaction_sql(), (str(uuid4()), *payload))
 
-            if request.dry_run:
-                connection.rollback()
-            else:
-                connection.commit()
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
         return ReconcileTransactionsResult(
             source_name=request.source_name,
@@ -208,17 +131,152 @@ class DatabaseManager:
             transaction_count=len(request.transactions),
             inserted=inserted,
             updated=updated,
-            dry_run=request.dry_run,
+            would_insert=0,
+            would_update=0,
+            dry_run=False,
             account_keys=account_keys,
         )
+
+    def _reconcile_dry_run(self, request: ReconcileTransactionsRequest) -> ReconcileTransactionsResult:
+        would_insert = 0
+        would_update = 0
+        account_keys = sorted({transaction.account.source_key for transaction in request.transactions})
+
+        connection = self.connect(read_only=True)
+        try:
+            cursor = connection.cursor()
+            for transaction in request.transactions:
+                transaction_id = self._find_existing_transaction_id(
+                    cursor,
+                    transaction.source_document_name,
+                    transaction.source_record_key,
+                )
+                if transaction_id:
+                    would_update += 1
+                else:
+                    would_insert += 1
+        finally:
+            connection.close()
+
+        return ReconcileTransactionsResult(
+            source_name=request.source_name,
+            parser_version=request.parser_version,
+            transaction_count=len(request.transactions),
+            inserted=0,
+            updated=0,
+            would_insert=would_insert,
+            would_update=would_update,
+            dry_run=True,
+            account_keys=account_keys,
+        )
+
+    @staticmethod
+    def _upsert_account(cursor: sqlite3.Cursor, transaction: Any) -> None:
+        cursor.execute(
+            """
+            INSERT INTO accounts (id, institution, account_name, account_type, owner, currency)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              institution = excluded.institution,
+              account_name = excluded.account_name,
+              account_type = excluded.account_type,
+              owner = excluded.owner,
+              currency = excluded.currency
+            """,
+            (
+                transaction.account.source_key,
+                transaction.account.institution,
+                transaction.account.account_name,
+                transaction.account.account_type,
+                transaction.account.owner,
+                transaction.account.currency,
+            ),
+        )
+
+    @staticmethod
+    def _transaction_payload(transaction: Any, batch_id: str, amount: float) -> tuple:
+        return (
+            transaction.account.source_key,
+            batch_id,
+            transaction.source_record_key,
+            transaction.source_document_name,
+            transaction.occurred_on.isoformat(),
+            transaction.posted_on.isoformat() if transaction.posted_on else None,
+            transaction.description_raw,
+            transaction.merchant_normalized,
+            amount,
+            transaction.direction,
+            transaction.account.currency,
+            transaction.primary_category,
+            transaction.subcategory,
+            transaction.household_role,
+            transaction.lifecycle,
+            transaction.transfer_group_key,
+            transaction.statement_period,
+            json.dumps(transaction.metadata),
+        )
+
+    @staticmethod
+    def _update_transaction_sql() -> str:
+        return """
+            UPDATE transactions
+            SET account_id = ?,
+                import_batch_id = ?,
+                source_record_key = ?,
+                source_document_name = ?,
+                occurred_on = ?,
+                posted_on = ?,
+                description_raw = ?,
+                merchant_normalized = ?,
+                amount = ?,
+                direction = ?,
+                currency = ?,
+                primary_category = ?,
+                subcategory = ?,
+                household_role = ?,
+                lifecycle = ?,
+                transfer_group_key = ?,
+                statement_period = ?,
+                metadata_json = ?
+            WHERE id = ?
+            """
+
+    @staticmethod
+    def _insert_transaction_sql() -> str:
+        return """
+            INSERT INTO transactions (
+              id,
+              account_id,
+              import_batch_id,
+              source_record_key,
+              source_document_name,
+              occurred_on,
+              posted_on,
+              description_raw,
+              merchant_normalized,
+              amount,
+              direction,
+              currency,
+              primary_category,
+              subcategory,
+              household_role,
+              lifecycle,
+              transfer_group_key,
+              statement_period,
+              metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
 
     def query(self, sql: str, params: list[str | int | float]) -> SqlQueryResult:
         lowered = sql.lstrip().lower()
         if not (lowered.startswith("select") or lowered.startswith("with")):
             raise ValueError("Only read-only SELECT and WITH queries are allowed.")
 
-        with self.connect() as connection:
+        connection = self.connect(read_only=True)
+        try:
             rows = [dict(row) for row in connection.execute(sql, params).fetchall()]
+        finally:
+            connection.close()
 
         return SqlQueryResult(row_count=len(rows), rows=rows)
 
