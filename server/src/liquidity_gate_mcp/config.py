@@ -16,11 +16,25 @@ class ServerSettings:
     watch_root: Path
 
 
+def default_watch_root() -> Path:
+    """Default location for real financial documents.
+
+    Defaults to ``~/Documents/CashFlow`` so private statements never live
+    inside the repository. Override with ``LIQUIDITY_GATE_WATCH_ROOT``.
+    """
+    return Path.home() / "Documents" / "CashFlow"
+
+
 def load_settings() -> ServerSettings:
     default_root = Path(__file__).resolve().parents[3]
     project_root = Path(os.getenv("LIQUIDITY_GATE_ROOT", default_root)).resolve()
     docs_dir = project_root / "docs"
-    watch_root = Path(os.getenv("LIQUIDITY_GATE_WATCH_ROOT", project_root)).resolve()
+    watch_root_env = os.getenv("LIQUIDITY_GATE_WATCH_ROOT")
+    watch_root = (
+        Path(watch_root_env).expanduser().resolve()
+        if watch_root_env
+        else default_watch_root()
+    )
 
     return ServerSettings(
         project_root=project_root,

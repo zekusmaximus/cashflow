@@ -11,7 +11,11 @@ src-tauri/gen/
 server/.venv/
 server/.mypy_cache/
 server/.pytest_cache/
-server/__pycache__/
+
+# Python bytecode caches at any depth
+**/__pycache__/
+*.py[cod]
+*$py.class
 
 *.db
 *.db-shm
