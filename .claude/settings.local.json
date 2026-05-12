@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell.exe -NoProfile -Command \"[Environment]::GetEnvironmentVariable\\('LIQUIDITY_GATE_WATCH_ROOT','User'\\)\")",
+      "Bash(powershell.exe -NoProfile -Command \"[Environment]::SetEnvironmentVariable\\('LIQUIDITY_GATE_WATCH_ROOT', 'C:\\\\Users\\\\Jeff\\\\Documents\\\\Cashflow', 'User'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(server/.venv/Scripts/python.exe -c ' *)",
+      "Bash(server/.venv/Scripts/python.exe -m pytest server/tests -q)",
+      "Bash(server/.venv/Scripts/python.exe -m pip install pytest)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}

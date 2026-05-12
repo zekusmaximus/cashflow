@@ -10,6 +10,20 @@ export default defineConfig({
     host: host ?? false,
     port: 1420,
     strictPort: true,
+    watch: {
+      ignored: [
+        '**/.venv*/**',
+        '**/__pycache__/**',
+        '**/.pytest_cache/**',
+        '**/.mypy_cache/**',
+        '**/server/**',
+        '**/src-tauri/target/**',
+        '**/src-tauri/gen/**',
+        '**/*.db',
+        '**/*.db-shm',
+        '**/*.db-wal',
+      ],
+    },
     hmr: host
       ? {
           protocol: 'ws',

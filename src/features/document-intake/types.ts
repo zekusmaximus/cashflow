@@ -1,3 +1,9 @@
+export interface MatchedFile {
+  relativePath: string;
+  filename: string;
+  score: number;
+}
+
 export interface ChecklistItem {
   id: string;
   category: string;
@@ -8,6 +14,8 @@ export interface ChecklistItem {
   source: string;
   whyNeeded: string;
   obtained: boolean;
+  obtainedSource: 'tracker' | 'filesystem' | 'none';
+  matchedFiles: MatchedFile[];
   dateAdded: string;
   notes: string;
 }
@@ -19,8 +27,15 @@ export interface ChecklistCategorySummary {
   missing: number;
 }
 
+export interface WatchRootStatus {
+  root: string;
+  exists: boolean;
+  fileCount: number;
+}
+
 export interface ChecklistDataset {
   items: ChecklistItem[];
+  watchRoot: WatchRootStatus;
   summary: {
     totalItems: number;
     obtainedCount: number;

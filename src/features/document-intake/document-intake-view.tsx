@@ -1,8 +1,8 @@
 import type { UseQueryResult } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, FileSearch, FolderSync } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileSearch, FolderSync, FileCheck2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge';
 import { Card } from '../../components/ui/card';
-import type { ChecklistDataset } from './types';
+import type { ChecklistDataset, WatchRootStatus } from './types';
 
 interface DocumentIntakeViewProps {
   query: UseQueryResult<ChecklistDataset, Error>;
@@ -21,7 +21,7 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
     );
   }
 
-  const { items, summary } = query.data;
+  const { items, summary, watchRoot } = query.data;
 
   return (
     <div className="grid gap-6">
@@ -34,6 +34,7 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
               <p className="max-w-2xl text-sm text-ink/70">
                 The intake board is driven by the extracted tracker CSV in docs and is designed to stay in lockstep with the Python MCP server’s metadata scan.
               </p>
+              <WatchRootBanner watchRoot={watchRoot} />
             </div>
             <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
               <Metric icon={FileSearch} label="Tracked" value={summary.totalItems} />
@@ -113,10 +114,26 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
                       <Badge tone={item.obtained ? 'success' : 'warning'}>
                         {item.obtained ? 'Obtained' : 'Missing'}
                       </Badge>
+                      {item.obtainedSource === 'filesystem' ? (
+                        <div className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-[0.14em] text-moss">
+                          <FileCheck2 className="h-3 w-3" />
+                          Auto-matched
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-4">
                       <div className="font-medium text-ink">{item.document}</div>
                       <div className="mt-1 text-xs text-ink/55">{item.format}</div>
+                      {item.matchedFiles.length > 0 ? (
+                        <ul className="mt-2 space-y-0.5 text-xs text-ink/70">
+                          {item.matchedFiles.map((file) => (
+                            <li key={file.relativePath} className="flex items-baseline gap-2">
+                              <span className="font-mono text-ink/80">{file.filename}</span>
+                              <span className="text-ink/45">{file.score.toFixed(2)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </td>
                     <td className="px-4 py-4 text-ink/75">{item.category}</td>
                     <td className="px-4 py-4">
@@ -161,5 +178,29 @@ function LoadingState() {
     <Card className="text-sm text-ink/70">
       Building the intake board from the tracker CSV.
     </Card>
+  );
+}
+
+function WatchRootBanner({ watchRoot }: { watchRoot: WatchRootStatus }) {
+  if (!watchRoot.root) {
+    return (
+      <p className="text-xs text-ink/55">
+        Filesystem matching is only active inside the Tauri desktop app.
+      </p>
+    );
+  }
+  if (!watchRoot.exists) {
+    return (
+      <p className="text-xs text-ember">
+        Watch root {' '}<span className="font-mono">{watchRoot.root}</span>{' '}
+        does not exist yet. Create it and drop your statements there to auto-match against the tracker.
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-ink/60">
+      Watching {' '}<span className="font-mono text-ink/80">{watchRoot.root}</span>{' '}
+      — {watchRoot.fileCount} file{watchRoot.fileCount === 1 ? '' : 's'} indexed. Rescans every 5 seconds.
+    </p>
   );
 }

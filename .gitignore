@@ -8,6 +8,8 @@ Thumbs.db
 src-tauri/target/
 src-tauri/gen/
 
+.venv/
+.venv-*/
 server/.venv/
 server/.mypy_cache/
 server/.pytest_cache/

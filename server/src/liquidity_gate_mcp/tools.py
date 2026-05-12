@@ -33,12 +33,12 @@ IGNORED_DIRECTORIES = {
     ".claudecowork",
 }
 
+MATCH_THRESHOLD = 0.35
+
 STOP_WORDS = {
     "all",
     "and",
     "annual",
-    "current",
-    "every",
     "export",
     "history",
     "if",
@@ -47,13 +47,13 @@ STOP_WORDS = {
     "or",
     "pdf",
     "screenshot",
-    "statement",
-    "statements",
     "the",
     "ytd",
     "2026",
     "2027",
 }
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 def read_document_metadata(
@@ -154,7 +154,7 @@ def find_matches(row: DocumentTrackerRow, scan_root: Path, candidates: list[Path
 
     for candidate in candidates:
         score = score_candidate(row, candidate)
-        if score >= 0.42:
+        if score >= MATCH_THRESHOLD:
             matches.append((score, candidate))
 
     matches.sort(key=lambda item: item[0], reverse=True)
@@ -210,11 +210,16 @@ def expected_extensions(format_text: str) -> set[str]:
 
 
 def tokenize(value: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[a-z0-9]+", value.lower())
-        if len(token) > 2 and token not in STOP_WORDS
-    }
+    # Split compound names ("CardActivity" -> "Card Activity", "HSAElection" -> "HSA Election")
+    # before lowercasing, then split letter/digit boundaries so "401k" -> ["401", "k"]
+    # to align with how "401(k)" tokenizes from the tracker.
+    spaced = _CAMEL_BOUNDARY.sub(" ", value)
+    tokens: set[str] = set()
+    for chunk in re.findall(r"[a-z0-9]+", spaced.lower()):
+        for part in re.findall(r"[a-z]+|[0-9]+", chunk):
+            if len(part) > 2 and part not in STOP_WORDS:
+                tokens.add(part)
+    return tokens
 
 
 def normalize_text(value: str) -> str:
