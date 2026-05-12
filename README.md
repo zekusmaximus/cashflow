@@ -8,61 +8,43 @@ Liquidity Gate is a local-first desktop workspace for reconstructing household c
 - Tailwind CSS with hand-wired shadcn/ui-compatible components
 - TanStack Query for local data orchestration
 - SQLite via `@tauri-apps/plugin-sql`
-- Python MCP server with `mcp`, `pydantic`, and `watchdog`
+- Python MCP server using `mcp`, `pydantic`, and `watchdog`
 
-## Repository Layout
+## Repository layout
 
-- `docs/` holds the canonical planning references: `00_CASH_FLOW_MASTER_INDEX.md` and the extracted tracker CSV. The frontend and Python server both load these from `docs/`.
-- `src/` contains the React UI, including Document Intake and Cash Flow dashboard views.
-- `src-tauri/` contains the Tauri v2 shell and plugin permissions.
-- `server/` contains the Python MCP server, its schema, and supporting models.
-- `.claudecowork/` contains a Financial Detective persona file plus MCP connection metadata.
+- [docs/](docs/) — canonical planning references: the master index and the tracker CSV that drives the intake view.
+- [src/](src/) — React UI: Document Intake and Cash Flow Dashboard.
+- [src-tauri/](src-tauri/) — Tauri v2 shell, Rust commands, plugin permissions.
+- [server/](server/) — Python MCP server, schema, and supporting models.
+- [.claudecowork/](.claudecowork/) — Financial Detective persona and MCP launch descriptor for Claude Cowork.
+- [.mcp.json](.mcp.json) — Generic MCP client config (used by Claude Code and other MCP-aware clients).
 
-## Local-First Rules
+## Local-first rules
 
-- No cloud sync is implemented.
-- The tracker CSV in `docs/` is the intake source of truth for document coverage.
-- The canonical schema lives in `server/sql/schema.sql` and is shared by the MCP server and the desktop app.
-- **Real financial documents are never tracked in this repository.** They live under `~/Documents/CashFlow` by default (override with `LIQUIDITY_GATE_WATCH_ROOT`). See "Document watch root" below.
+- No cloud sync is implemented. Everything runs against local SQLite and the local filesystem.
+- The tracker CSV in [docs/](docs/) is the single source of truth for which documents are needed.
+- The canonical schema lives in [server/sql/schema.sql](server/sql/schema.sql) and is shared by the MCP server and the desktop app.
+- **Real financial documents are never tracked in this repository.** They live under a watch root outside the repo (configured via `LIQUIDITY_GATE_WATCH_ROOT`).
 
-## Tracker spreadsheet format
+## Prerequisites
 
-The tracker is maintained as `docs/Spreadsheet_checklist_for_document_tracking.csv`. Earlier revisions of this repository also tracked an `.xlsx` mirror; that file has been removed. The CSV is now the single canonical source — edit it directly and commit.
+- Node.js 20 or newer
+- Rust toolchain (required for Tauri desktop builds)
+- Python 3.11 or newer
 
-## Document watch root
+## First-time setup
 
-The Python MCP server scans a directory for matched documents and watches it
-for filesystem events. Configure it with `LIQUIDITY_GATE_WATCH_ROOT`:
-
-| Scenario | Value |
-| --- | --- |
-| Default (no env var) | `~/Documents/CashFlow` (created on demand) |
-| Custom location | Set `LIQUIDITY_GATE_WATCH_ROOT=/absolute/path/to/financial-docs` |
-
-The watch root must point at a directory **outside the repository** so private
-statements stay out of git history. The repo's own `docs/`, `src/`,
-`src-tauri/`, `server/`, `node_modules/`, `dist/`, and `.git/` directories are
-hard-coded into the ignore list, so even if you point the watch root at the
-project root the scanner will still skip them; they will not be matched as
-candidate documents.
-
-## Getting Started
-
-### 1. Install prerequisites
-
-- Node.js 20+
-- Rust toolchain for Tauri desktop builds
-- Python 3.11+
-
-### 2. Install frontend dependencies
+### 1. Install frontend dependencies
 
 ```bash
 npm install
 ```
 
-### 3. Create a Python environment for the MCP server
+### 2. Create the Python virtual environment
 
-#### macOS / Linux
+The server's venv lives at `server/.venv`. Do not create venvs at the repo root — they pollute the workspace and Vite's file watcher.
+
+**macOS / Linux:**
 
 ```bash
 python3 -m venv server/.venv
@@ -71,7 +53,7 @@ python -m pip install --upgrade pip
 python -m pip install -e ./server
 ```
 
-#### Windows (PowerShell)
+**Windows (PowerShell):**
 
 ```powershell
 python -m venv server/.venv
@@ -80,71 +62,120 @@ python -m pip install --upgrade pip
 python -m pip install -e ./server
 ```
 
-### 4. Start the MCP server
+### 3. Set the watch root
 
-From the repository root, after activating the virtual environment:
+The MCP server and the Tauri app both read `LIQUIDITY_GATE_WATCH_ROOT` to find your real financial documents. This must point at a directory **outside the repo**.
 
-```bash
-python -m liquidity_gate_mcp.server
+**Windows (PowerShell, persistent at User scope):**
+
+```powershell
+[Environment]::SetEnvironmentVariable("LIQUIDITY_GATE_WATCH_ROOT", "C:\Users\YourName\Documents\Cashflow", "User")
 ```
 
-The server runs over stdio and exposes:
+After running this, **open a new PowerShell window** so the variable is inherited by `npm` and `python` subprocesses.
 
-- `read_document_metadata`
-- `reconcile_transactions`
-- `query_cashflow_data`
+**macOS / Linux:**
 
-It also exposes the master index and tracker CSV as MCP resources and registers a `financial_detective` prompt.
+```bash
+export LIQUIDITY_GATE_WATCH_ROOT="$HOME/Documents/Cashflow"
+```
 
-### 5. Start the desktop app
+Add the export to `~/.bashrc` or `~/.zshrc` to persist across sessions.
 
-In a separate terminal:
+If you skip this step, both the desktop app and the MCP server fall back to `~/Documents/CashFlow`.
+
+### 4. Create the watch root folder
+
+```powershell
+New-Item -ItemType Directory -Force "C:\Users\YourName\Documents\Cashflow"
+```
+
+```bash
+mkdir -p ~/Documents/Cashflow
+```
+
+Avoid putting the folder under OneDrive, iCloud, or Dropbox — cloud-sync placeholders interfere with the file watcher, and syncing real financial documents to a third-party cloud contradicts the local-first rule.
+
+## Running the desktop app
+
+From the repo root:
 
 ```bash
 npm run tauri dev
 ```
 
-If you only want the web UI during early iteration, run:
+This compiles the Rust shell (~30 seconds on first run), starts the Vite dev server on port 1420, and opens the Tauri window. You should see:
 
-```bash
-npm run dev
+- The **Document Intake** view, listing all 86 tracker rows.
+- A status banner showing which folder is being watched and how many files are indexed.
+- Any file you drop in the watch root appears under its best-matching tracker row within 5 seconds, badged "Auto-matched."
+
+To stop the app, **close the window** (clean shutdown). Pressing Ctrl+C in the terminal also works but produces benign cleanup warnings from the embedded WebView.
+
+For UI-only iteration without recompiling Rust, use `npm run dev` (web view, port 1420). The watch-root scan is disabled in that mode because there is no Tauri runtime.
+
+## Naming files for auto-matching
+
+Filenames are scored against tracker rows by token overlap, string similarity, and an extension bonus. A few conventions make matching reliable:
+
+- **Use the noun tokens from the tracker's Document column.** For doc-001 that's `Chase Credit Card`. For doc-003 that's `Ally HYSA`. Don't paraphrase.
+- **Underscore-separate every word.** `Chase_Credit_Card` matches cleanly; `ChaseCreditCard` and `Chase-CardActivity` are weaker.
+- **The extension matters.** `.csv` for transaction exports, `.pdf` for statements, `.png` or `.jpg` for screenshots. The matcher gives a +0.15 score bonus when the extension matches the tracker's Format column.
+- **Stopwords are stripped from both sides.** `2026`, `2027`, `all`, `and`, `annual`, `every`, `current`, `export`, `history`, `pdf`, `screenshot`, `the`, `ytd` don't help or hurt — include them for human readability if you like.
+
+Examples that match cleanly:
+
+```text
+2026-05-12_Chase_Credit_Card.csv             -> doc-001 Chase credit-card
+2026-05-12_Beacon_Checking.csv               -> doc-002 Beacon checking
+2026-05-12_Ally_HYSA_Savings.csv             -> doc-003 Ally HYSA
+2026-05-12_Jeff_Regular_Paystub.pdf          -> doc-011 Jeff regular paystubs
+2026-05-12_Ashley_RSU_Vesting_Paystub.pdf    -> doc-015 Ashley RSU vesting
+2026-05-12_Primary_Mortgage_Statement.pdf    -> doc-021 Primary mortgage
 ```
 
-## MCP client configuration
+Each file is assigned to its single highest-scoring row, so a file never appears under multiple rows. The intake row's "Auto-matched" badge shows the matched filename and the score.
 
-Two MCP config files live in this repository. They serve distinct purposes:
+## Connecting Claude Cowork
 
-| File | Purpose |
-| --- | --- |
-| `.mcp.json` | **Canonical** generic MCP client config. Use this for any MCP-aware client (e.g. Claude Code). |
-| `.claudecowork/mcp-server.json` | Claude Cowork-specific server descriptor (transport, command, persona prompt). Used together with `.claudecowork/config.json`. |
+The MCP server is **launched by an MCP client**, not run by hand. Claude Cowork spawns it as a subprocess over stdio when it opens a session in this project.
 
-If you only need a generic MCP client, point at `.mcp.json`. If you are using
-Claude Cowork, the persona and startup sequence in `.claudecowork/` apply on
-top of that.
+Cowork reads two files from this repo:
 
-## Current Scaffold Status
+- [.claudecowork/config.json](.claudecowork/config.json) — agent name, persona path, MCP descriptor path, and the startup sequence (read the master index first, then the tracker, then call `read_document_metadata`).
+- [.claudecowork/mcp-server.json](.claudecowork/mcp-server.json) — how to launch the server: `python -m liquidity_gate_mcp.server` from the `server/` directory, with `PYTHONPATH=src` and `LIQUIDITY_GATE_ROOT=..`.
 
-- The intake view renders the full 86-item checklist by reading
-  `docs/Spreadsheet_checklist_for_document_tracking.csv` **at runtime** (Tauri
-  filesystem in the desktop app, fetched static asset on the web).
-- The dashboard reads `monthly_cashflow_summary`, `liquidity_gates`, and
-  `leakage_categories` from the local SQLite database. When the database is
-  empty it renders an explicit demo fallback so the UI still shows expected
-  composition during early iteration.
-- The Tauri shell is configured for local SQLite and file-system plugins, with
-  a restrictive Content Security Policy.
-- The Python server includes a folder watcher, schema-enforced transaction
-  ingestion, and read-only SQL querying. Read-only access is enforced at the
-  SQLite connection level (URI `mode=ro` + `PRAGMA query_only=1`), so
-  `WITH ... DELETE` style CTEs cannot mutate state.
+To use it:
+
+1. Complete first-time setup steps 1–4 above. The Python venv at `server/.venv` must exist and have `liquidity-gate-mcp` installed.
+2. Make sure the `python` Cowork invokes can find the `liquidity_gate_mcp` package. The descriptor uses bare `python`, which resolves to whatever is on `PATH` when Cowork starts the subprocess. If your `PATH` does not include the venv, edit `.claudecowork/mcp-server.json` to use the full venv interpreter path: `server/.venv/Scripts/python.exe` (Windows) or `server/.venv/bin/python` (macOS/Linux).
+3. Make sure `LIQUIDITY_GATE_WATCH_ROOT` is set in the environment Cowork inherits.
+4. Open this project directory in Cowork. The Financial Detective persona auto-loads, and three MCP tools become available: `read_document_metadata`, `reconcile_transactions`, `query_cashflow_data`. The master index and tracker CSV are exposed as MCP resources.
+
+To verify the MCP server starts without Cowork, run it once from an activated venv:
+
+```bash
+python -m liquidity_gate_mcp.server
+```
+
+It will print nothing and block, waiting for JSON-RPC on stdin. **That is correct** — the server uses stdio. Press Ctrl+C to exit; the traceback you see is the standard cancel cleanup, not an error.
+
+## Connecting other MCP clients
+
+For any MCP client that reads an `mcp.json`-style config (Claude Code, etc.), [.mcp.json](.mcp.json) declares the same server. The client launches it the same way Cowork does.
+
+## Tracker spreadsheet format
+
+The active tracker is [docs/Spreadsheet_checklist_for_document_tracking.csv](docs/Spreadsheet_checklist_for_document_tracking.csv). Earlier revisions also tracked an `.xlsx` mirror; that file has been removed. The CSV is the single canonical source — edit it directly and commit.
+
+The intake view marks a row as "Obtained" if either the CSV's `Obtained ✓` column says so (manual override), or a file in the watch root auto-matches the row.
 
 ## Testing
 
 ### Python
 
 ```bash
-source server/.venv/bin/activate
+source server/.venv/bin/activate    # PowerShell: server/.venv/Scripts/Activate.ps1
 python -m pytest server/tests
 ```
 
@@ -154,11 +185,11 @@ python -m pytest server/tests
 npm test
 ```
 
-### Type-check / build
+### Type-check and production build
 
 ```bash
 npx tsc --noEmit
 npm run build
 ```
 
-CI runs all four on every push / PR — see `.github/workflows/ci.yml`.
+CI runs all four on every push and pull request — see [.github/workflows/ci.yml](.github/workflows/ci.yml).
