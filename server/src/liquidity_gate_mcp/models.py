@@ -170,3 +170,54 @@ class IngestRunResult(BaseModel):
     scanned_root: str
     totals: IngestRunTotals
     files: list[IngestFileSummary]
+
+
+class PairTransfersRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date_tolerance_days: int = 3
+    dry_run: bool = False
+    include_diagnostics: bool = True
+
+
+class UnpairedTransfer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    account_id: str
+    occurred_on: str
+    amount: float
+    direction: str
+    description: str
+    likely_reason: str | None = None
+
+
+class AmbiguousTransfer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    account_id: str
+    occurred_on: str
+    amount: float
+    candidates: list[str] = Field(default_factory=list)
+
+
+class SuspectedUntagged(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    description: str
+    likely_partner_id: str
+    confidence: Literal["strong", "weak"]
+
+
+class PairTransfersResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pairs_created: int = 0
+    candidates_examined: int = 0
+    already_paired_skipped: int = 0
+    unpaired: list[UnpairedTransfer] = Field(default_factory=list)
+    ambiguous: list[AmbiguousTransfer] = Field(default_factory=list)
+    suspected_untagged: list[SuspectedUntagged] = Field(default_factory=list)
+    dry_run: bool = False
