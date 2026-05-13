@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import load_settings
 from .database import DatabaseManager
+from .ingest import ingest_watch_root as ingest_watch_root_impl
 from .models import ReconcileTransactionsRequest, SqlQueryRequest
 from .tools import (
     query_cashflow_data as query_cashflow_data_impl,
@@ -64,6 +65,11 @@ def reconcile_transactions(request: dict) -> dict:
 def query_cashflow_data(request: dict) -> dict:
     parsed_request = SqlQueryRequest.model_validate(request)
     return query_cashflow_data_impl(database, parsed_request).model_dump()
+
+
+@mcp.tool()
+def ingest_documents(folder_path: str | None = None) -> dict:
+    return ingest_watch_root_impl(settings, database, folder_path).model_dump()
 
 
 def main() -> None:

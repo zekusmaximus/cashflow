@@ -28,9 +28,9 @@ export function DashboardView({ query }: DashboardViewProps) {
           <div className="flex items-start justify-between gap-6">
             <div>
               <Badge tone="info">Cash Flow</Badge>
-              <h2 className="mt-3 text-2xl font-semibold text-ink">Inflow vs. outflow placeholder model</h2>
+              <h2 className="mt-3 text-2xl font-semibold text-ink">Inflow vs. outflow by month</h2>
               <p className="mt-2 max-w-2xl text-sm text-ink/70">
-                This chart is wired for local SQLite reads once reconciled transactions land in the database. Until then, it shows the expected dashboard composition and the gate-oriented emphasis.
+                Sourced from local SQLite. Each bar pair is one month's inflows and outflows recorded in the transactions table; transfers are excluded. With only one card ingested, expect outflows to dominate until other accounts are wired up.
               </p>
             </div>
             <div className="rounded-[22px] border border-sand/35 bg-fog/80 p-4 text-right">

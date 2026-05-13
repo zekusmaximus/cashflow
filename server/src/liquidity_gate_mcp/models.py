@@ -137,3 +137,36 @@ class SqlQueryResult(BaseModel):
 
     row_count: int
     rows: list[dict[str, Any]]
+
+
+class IngestFileSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file: str
+    doc_id: str | None
+    parser: str | None
+    status: Literal["ingested", "no_parser", "error"]
+    inserted: int = 0
+    updated: int = 0
+    skipped_pending: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+class IngestRunTotals(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    files_seen: int
+    files_ingested: int
+    files_without_parser: int
+    files_with_errors: int
+    inserted: int
+    updated: int
+    skipped_pending: int
+
+
+class IngestRunResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scanned_root: str
+    totals: IngestRunTotals
+    files: list[IngestFileSummary]

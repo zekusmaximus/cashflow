@@ -16,7 +16,6 @@ let databasePromise: Promise<SqlDatabase | null> | null = null;
 let schemaPromise: Promise<string> | null = null;
 
 const schemaAssetUrl = new URL('../../server/sql/schema.sql', import.meta.url).href;
-const tauriSqlModuleName: string = '@tauri-apps/plugin-sql';
 
 export function splitSqlStatements(sql: string): string[] {
   // Robust splitter: respects single/double-quoted strings and line/block
@@ -182,13 +181,11 @@ async function loadDatabase(): Promise<SqlDatabase | null> {
     return null;
   }
 
-  const sqlModule = (await import(/* @vite-ignore */ tauriSqlModuleName)) as {
+  const sqlModule = (await import('@tauri-apps/plugin-sql')) as unknown as {
     default: { load(connection: string): Promise<SqlDatabase> };
   };
 
-  return (sqlModule.default as { load: (connection: string) => Promise<SqlDatabase> }).load(
-    'sqlite:liquidity-gate.db',
-  );
+  return sqlModule.default.load('sqlite:liquidity-gate.db');
 }
 
 export async function getDatabase(): Promise<SqlDatabase | null> {

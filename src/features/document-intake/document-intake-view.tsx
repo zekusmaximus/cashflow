@@ -2,6 +2,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, FileSearch, FolderSync, FileCheck2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge';
 import { Card } from '../../components/ui/card';
+import { useTransactionCounts } from '../../hooks/use-transaction-counts';
 import type { ChecklistDataset, WatchRootStatus } from './types';
 
 interface DocumentIntakeViewProps {
@@ -9,6 +10,8 @@ interface DocumentIntakeViewProps {
 }
 
 export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
+  const transactionCountsQuery = useTransactionCounts();
+
   if (query.isLoading) {
     return <LoadingState />;
   }
@@ -22,6 +25,7 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
   }
 
   const { items, summary, watchRoot } = query.data;
+  const transactionCounts = transactionCountsQuery.data ?? new Map<string, number>();
 
   return (
     <div className="grid gap-6">
@@ -126,12 +130,20 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
                       <div className="mt-1 text-xs text-ink/55">{item.format}</div>
                       {item.matchedFiles.length > 0 ? (
                         <ul className="mt-2 space-y-0.5 text-xs text-ink/70">
-                          {item.matchedFiles.map((file) => (
-                            <li key={file.relativePath} className="flex items-baseline gap-2">
-                              <span className="font-mono text-ink/80">{file.filename}</span>
-                              <span className="text-ink/45">{file.score.toFixed(2)}</span>
-                            </li>
-                          ))}
+                          {item.matchedFiles.map((file) => {
+                            const ingestedCount = transactionCounts.get(file.filename) ?? 0;
+                            return (
+                              <li key={file.relativePath} className="flex items-baseline gap-2">
+                                <span className="font-mono text-ink/80">{file.filename}</span>
+                                <span className="text-ink/45">{file.score.toFixed(2)}</span>
+                                {ingestedCount > 0 ? (
+                                  <span className="text-moss">
+                                    · {ingestedCount} transaction{ingestedCount === 1 ? '' : 's'} ingested
+                                  </span>
+                                ) : null}
+                              </li>
+                            );
+                          })}
                         </ul>
                       ) : null}
                     </td>

@@ -25,6 +25,7 @@ Liquidity Gate is a local-first desktop workspace for reconstructing household c
 - The tracker CSV in [docs/](docs/) is the single source of truth for which documents are needed.
 - The canonical schema lives in [server/sql/schema.sql](server/sql/schema.sql) and is shared by the MCP server and the desktop app.
 - **Real financial documents are never tracked in this repository.** They live under a watch root outside the repo (configured via `LIQUIDITY_GATE_WATCH_ROOT`).
+- **The SQLite database lives in the OS app-config directory** to match what Tauri's `plugin-sql` resolves `sqlite:liquidity-gate.db` against — the desktop app and the MCP server share one file. Defaults: `%APPDATA%\com.jeff.liquiditygate\liquidity-gate.db` on Windows, `~/Library/Application Support/com.jeff.liquiditygate/liquidity-gate.db` on macOS, `~/.config/com.jeff.liquiditygate/liquidity-gate.db` on Linux. Override with `LIQUIDITY_GATE_DB_PATH`.
 
 ## Prerequisites
 
