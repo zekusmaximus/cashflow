@@ -1,0 +1,24 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+Thumbs.db
+*.log
+
+src-tauri/target/
+src-tauri/gen/
+
+.venv/
+.venv-*/
+server/.venv/
+server/.mypy_cache/
+server/.pytest_cache/
+
+# Python bytecode caches at any depth
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+*.db
+*.db-shm
+*.db-wal

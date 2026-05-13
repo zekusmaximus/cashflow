@@ -1,0 +1,16 @@
+[package]
+name = "liquidity-gate"
+version = "0.1.0"
+description = "Local-first desktop shell for Liquidity Gate"
+authors = ["Jeff"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.6.1", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.11.1", features = [] }
+tauri-plugin-fs = "2.5.1"
+tauri-plugin-sql = { version = "2.4.0", features = ["sqlite"] }

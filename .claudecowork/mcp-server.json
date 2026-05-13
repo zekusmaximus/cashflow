@@ -1,0 +1,12 @@
+{
+  "name": "liquidity-gate",
+  "transport": "stdio",
+  "command": "python",
+  "args": ["-m", "liquidity_gate_mcp.server"],
+  "cwd": "server",
+  "env": {
+    "PYTHONPATH": "src",
+    "LIQUIDITY_GATE_ROOT": ".."
+  },
+  "prompt": "financial_detective"
+}
