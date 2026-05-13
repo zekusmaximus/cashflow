@@ -1,9 +1,6 @@
 import type { UseQueryResult } from '@tanstack/react-query';
-import { ArrowDownRight, ArrowUpRight, Vault } from 'lucide-react';
-import { Badge } from '../../components/ui/badge';
-import { Card } from '../../components/ui/card';
-import { currency, percent } from '../../lib/utils';
-import type { DashboardSnapshot } from './types';
+import { cn, currency, percent } from '../../lib/utils';
+import type { CashFlowMonth, DashboardSnapshot, LeakageCategory, LiquidityGate } from './types';
 
 interface DashboardViewProps {
   query: UseQueryResult<DashboardSnapshot, Error>;
@@ -11,150 +8,370 @@ interface DashboardViewProps {
 
 export function DashboardView({ query }: DashboardViewProps) {
   if (query.isLoading) {
-    return <Card className="text-sm text-ink/70">Preparing the local dashboard snapshot.</Card>;
+    return (
+      <div className="rounded-xl border border-ink/8 bg-white p-6 text-sm text-ink/70 shadow-card">
+        Preparing the local dashboard snapshot.
+      </div>
+    );
   }
 
   if (query.isError || !query.data) {
-    return <Card className="text-sm text-ember">Unable to load the cash-flow dashboard snapshot.</Card>;
+    return (
+      <div className="rounded-xl border border-ink/8 bg-white p-6 text-sm text-ember shadow-card">
+        Unable to load the cash-flow dashboard snapshot.
+      </div>
+    );
   }
 
   const { months, gates, leakageCategories } = query.data;
-  const chartMax = Math.max(...months.flatMap((month) => [month.inflow, month.outflow]));
+  const totalInflow = months.reduce((total, m) => total + m.inflow, 0);
+  const totalOutflow = months.reduce((total, m) => total + m.outflow, 0);
+  const netYtd = totalInflow - totalOutflow;
+  const avgInflow = months.length === 0 ? 0 : totalInflow / months.length;
+  const avgOutflow = months.length === 0 ? 0 : totalOutflow / months.length;
+  const primaryGate = gates[0];
+  const gateProgress =
+    primaryGate && primaryGate.targetAmount > 0
+      ? Math.min(primaryGate.currentAmount / primaryGate.targetAmount, 1)
+      : 0;
+
+  const dataMax = Math.max(0, ...months.flatMap((m) => [m.inflow, m.outflow]));
+  const chartMax = Math.max(20000, Math.ceil(dataMax / 5000) * 5000);
+  const yAxisLabels = [chartMax, chartMax * 0.75, chartMax * 0.5, chartMax * 0.25, 0];
 
   return (
-    <div className="grid gap-6">
-      <section className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
-        <Card>
-          <div className="flex items-start justify-between gap-6">
-            <div>
-              <Badge tone="info">Cash Flow</Badge>
-              <h2 className="mt-3 text-2xl font-semibold text-ink">Inflow vs. outflow by month</h2>
-              <p className="mt-2 max-w-2xl text-sm text-ink/70">
-                Sourced from local SQLite. Each bar pair is one month's inflows and outflows recorded in the transactions table; transfers are excluded. With only one card ingested, expect outflows to dominate until other accounts are wired up.
-              </p>
-            </div>
-            <div className="rounded-[22px] border border-sand/35 bg-fog/80 p-4 text-right">
-              <p className="text-xs uppercase tracking-[0.18em] text-ink/55">Net YTD</p>
-              <p className="mt-2 text-3xl font-semibold text-moss">
-                {currency(months.reduce((total, month) => total + month.inflow - month.outflow, 0))}
-              </p>
-            </div>
+    <div>
+      <div className="mb-5 flex items-end justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Phase 2 · Reconstruction
           </div>
-          <div className="mt-8 grid gap-4 sm:grid-cols-5">
-            {months.map((month) => (
-              <div key={month.label} className="rounded-[22px] border border-sand/30 bg-fog/65 p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-ink">{month.label}</p>
-                  <Vault className="h-4 w-4 text-ink/45" />
-                </div>
-                <div className="mt-4 flex h-44 items-end gap-3">
-                  <Bar height={(month.inflow / chartMax) * 100} tone="inflow" />
-                  <Bar height={(month.outflow / chartMax) * 100} tone="outflow" />
-                </div>
-                <div className="mt-4 space-y-2 text-xs text-ink/65">
-                  <ValueRow icon={ArrowUpRight} label="Inflow" value={currency(month.inflow)} />
-                  <ValueRow icon={ArrowDownRight} label="Outflow" value={currency(month.outflow)} />
-                </div>
+          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink">
+            Cash-flow dashboard
+          </h1>
+          <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-ink/60">
+            Reconstructed from the local transactions table. Transfers excluded.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1 rounded-lg bg-ink/[0.05] p-0.5 text-[12px]">
+          <RangeButton active>YTD</RangeButton>
+          <RangeButton>12 mo</RangeButton>
+          <RangeButton>All</RangeButton>
+        </div>
+      </div>
+
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <KpiTile label="Net YTD" tone={netYtd >= 0 ? 'moss' : 'ember'}>
+          <div className="mt-1.5 text-[24px] font-semibold tnum">
+            {netYtd >= 0 ? '+' : ''}
+            {currency(netYtd)}
+          </div>
+          <div className="mt-1 text-[11px] text-ink/50 tnum">
+            {months.length} month{months.length === 1 ? '' : 's'} · inflow − outflow
+          </div>
+        </KpiTile>
+        <KpiTile label="Avg monthly inflow">
+          <div className="mt-1.5 text-[24px] font-semibold tnum text-ink">{currency(avgInflow)}</div>
+          <div className="mt-1 text-[11px] text-ink/50">Over {months.length} months</div>
+        </KpiTile>
+        <KpiTile label="Avg monthly outflow">
+          <div className="mt-1.5 text-[24px] font-semibold tnum text-ink">{currency(avgOutflow)}</div>
+          <div className="mt-1 text-[11px] text-ink/50">Over {months.length} months</div>
+        </KpiTile>
+        <KpiTile label="HYSA gate">
+          {primaryGate ? (
+            <>
+              <div className="mt-1.5 flex items-baseline gap-2">
+                <span className="text-[24px] font-semibold tnum">
+                  {percent(gateProgress)}
+                </span>
+                <span className="text-[11px] text-ink/45 tnum">
+                  {currency(primaryGate.currentAmount)} / {currency(primaryGate.targetAmount)}
+                </span>
               </div>
-            ))}
-          </div>
-        </Card>
+              <div className="mt-2 h-1 w-full rounded-full bg-ink/[0.06]">
+                <div
+                  className="h-full rounded-full bg-clay"
+                  style={{ width: `${gateProgress * 100}%` }}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="mt-1.5 text-[13px] text-ink/45">No gates configured.</div>
+          )}
+        </KpiTile>
+      </div>
 
-        <Card>
-          <div>
-            <Badge tone="warning">Liquidity Gates</Badge>
-            <h3 className="mt-3 text-2xl font-semibold text-ink">Constraint-first cash reserves</h3>
-          </div>
-          <div className="mt-6 space-y-5">
-            {gates.map((gate) => {
-              const progress = gate.targetAmount === 0 ? 0 : gate.currentAmount / gate.targetAmount;
-              return (
-                <div key={gate.gateKey} className="rounded-[24px] border border-sand/30 bg-fog/65 p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="font-semibold text-ink">{gate.label}</p>
-                      <p className="mt-1 text-xs uppercase tracking-[0.18em] text-ink/50">Target date {gate.targetDate}</p>
-                    </div>
-                    <Badge tone={progress >= 1 ? 'success' : 'warning'}>
-                      {percent(Math.min(progress, 1))}
-                    </Badge>
-                  </div>
-                  <div className="mt-4 h-3 rounded-full bg-sand/25">
-                    <div
-                      className="h-3 rounded-full bg-[linear-gradient(90deg,#c7744f,#8e392d)]"
-                      style={{ width: `${Math.min(progress, 1) * 100}%` }}
-                    />
-                  </div>
-                  <div className="mt-3 flex items-center justify-between text-sm text-ink/70">
-                    <span>{currency(gate.currentAmount)} current</span>
-                    <span>{currency(gate.targetAmount)} target</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      </section>
+      <div
+        className="grid gap-5"
+        style={{ gridTemplateColumns: 'minmax(0, 1.45fr) minmax(0, 1fr)' }}
+      >
+        <CashFlowChart months={months} chartMax={chartMax} yAxisLabels={yAxisLabels} />
+        <GatesPanel gates={gates} />
+      </div>
 
-      <section>
-        <Card>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <Badge tone="danger">Lifestyle Leakage</Badge>
-              <h3 className="mt-3 text-2xl font-semibold text-ink">Categories that can break the capital plan</h3>
-            </div>
-            <p className="max-w-xl text-sm text-ink/70">
-              The schema and the MCP server reserve dedicated leakage categories so an agent can flag recurring convenience spend without confusing it with core obligations.
-            </p>
-          </div>
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
-            {leakageCategories.map((category) => {
-              const ratio = category.cap === 0 ? 0 : category.monthlyBurn / category.cap;
-              return (
-                <div key={category.name} className="rounded-[24px] border border-sand/30 bg-fog/65 p-4">
-                  <p className="font-semibold text-ink">{category.name}</p>
-                  <div className="mt-5 h-28 rounded-[20px] bg-white/55 p-4">
-                    <div
-                      className="h-full rounded-[14px] bg-[linear-gradient(180deg,#2d5f73,#c7744f)]"
-                      style={{ width: `${Math.min(ratio, 1.4) * 100}%` }}
-                    />
-                  </div>
-                  <div className="mt-4 flex items-center justify-between text-sm text-ink/70">
-                    <span>{currency(category.monthlyBurn)} burn</span>
-                    <span>{currency(category.cap)} cap</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      </section>
+      <LeakageSection categories={leakageCategories} />
     </div>
   );
 }
 
-function Bar({ height, tone }: { height: number; tone: 'inflow' | 'outflow' }) {
-  const className = tone === 'inflow' ? 'bg-moss' : 'bg-clay';
-
-  return <div className={`w-full rounded-t-[16px] ${className}`} style={{ height: `${Math.max(height, 8)}%` }} />;
-}
-
-function ValueRow({
-  icon: Icon,
-  label,
-  value,
+function RangeButton({
+  children,
+  active = false,
 }: {
-  icon: typeof ArrowUpRight;
-  label: string;
-  value: string;
+  children: React.ReactNode;
+  active?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5" />
+    <button
+      type="button"
+      className={cn(
+        'rounded-md px-2.5 py-1 transition-colors',
+        active ? 'bg-white font-medium text-ink shadow-card' : 'text-ink/60 hover:text-ink',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function KpiTile({
+  label,
+  tone,
+  children,
+}: {
+  label: string;
+  tone?: 'moss' | 'ember';
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-ink/8 bg-white p-4 shadow-card">
+      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/50">
         {label}
-      </span>
-      <span className="font-medium text-ink">{value}</span>
+      </div>
+      <div
+        className={cn(
+          tone === 'moss' && 'text-moss',
+          tone === 'ember' && 'text-ember',
+        )}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function formatAxisLabel(value: number): string {
+  if (value === 0) return '$0';
+  return `$${Math.round(value / 1000)}k`;
+}
+
+function CashFlowChart({
+  months,
+  chartMax,
+  yAxisLabels,
+}: {
+  months: CashFlowMonth[];
+  chartMax: number;
+  yAxisLabels: number[];
+}) {
+  return (
+    <section className="rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-center justify-between gap-4 px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Cash flow
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            Inflow vs. outflow by month
+          </div>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-ink/65">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-sm bg-moss" />
+            Inflow
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-sm bg-clay" />
+            Outflow
+          </span>
+        </div>
+      </div>
+
+      <div className="px-5 pb-5">
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 flex w-10 flex-col justify-between py-1 text-right text-[10px] text-ink/35 tnum">
+            {yAxisLabels.map((value) => (
+              <span key={value}>{formatAxisLabel(value)}</span>
+            ))}
+          </div>
+          <div
+            className="ml-12 grid gap-6"
+            style={{ gridTemplateColumns: `repeat(${Math.max(months.length, 1)}, minmax(0, 1fr))` }}
+          >
+            {months.map((month) => (
+              <MonthBars key={month.label} month={month} chartMax={chartMax} />
+            ))}
+          </div>
+          <div className="ml-12 mt-2 h-px w-[calc(100%-3rem)] bg-ink/10" />
+        </div>
+        <div
+          className="ml-12 mt-2 grid gap-6 text-center text-[11px] font-medium text-ink/55"
+          style={{ gridTemplateColumns: `repeat(${Math.max(months.length, 1)}, minmax(0, 1fr))` }}
+        >
+          {months.map((m) => (
+            <div key={m.label}>{m.label}</div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MonthBars({ month, chartMax }: { month: CashFlowMonth; chartMax: number }) {
+  const inflowHeight = chartMax === 0 ? 0 : (month.inflow / chartMax) * 160;
+  const outflowHeight = chartMax === 0 ? 0 : (month.outflow / chartMax) * 160;
+  return (
+    <div className="flex h-48 items-end justify-center gap-2">
+      <div className="flex flex-col items-center gap-1">
+        <span className="text-[10px] font-medium text-ink/55 tnum">
+          {(month.inflow / 1000).toFixed(1)}k
+        </span>
+        <div className="w-7 rounded-t-md bg-moss" style={{ height: `${inflowHeight}px` }} />
+      </div>
+      <div className="flex flex-col items-center gap-1">
+        <span className="text-[10px] font-medium text-ink/55 tnum">
+          {(month.outflow / 1000).toFixed(1)}k
+        </span>
+        <div className="w-7 rounded-t-md bg-clay" style={{ height: `${outflowHeight}px` }} />
+      </div>
+    </div>
+  );
+}
+
+function GatesPanel({ gates }: { gates: LiquidityGate[] }) {
+  return (
+    <section className="rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-center justify-between px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Liquidity gates
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            Constraint-first reserves
+          </div>
+        </div>
+      </div>
+      <div className="space-y-4 px-5 pb-5">
+        {gates.map((gate) => (
+          <GateCard key={gate.gateKey} gate={gate} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function GateCard({ gate }: { gate: LiquidityGate }) {
+  const rawProgress = gate.targetAmount === 0 ? 0 : gate.currentAmount / gate.targetAmount;
+  const progress = Math.min(rawProgress, 1);
+  const complete = rawProgress >= 1;
+  return (
+    <div className="rounded-lg border border-ink/8 bg-paper/50 p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[13px] font-medium leading-snug text-ink">{gate.label}</p>
+          <p className="mt-0.5 text-[11px] uppercase tracking-[0.16em] text-ink/45">
+            Due {gate.targetDate}
+          </p>
+        </div>
+        <span
+          className={cn(
+            'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tnum',
+            complete ? 'bg-moss/12 text-moss' : 'bg-clay/12 text-clay',
+          )}
+        >
+          {percent(progress)}
+        </span>
+      </div>
+      <div className="mt-3 h-1.5 w-full rounded-full bg-ink/[0.06]">
+        <div
+          className={cn('h-full rounded-full', complete ? 'bg-moss' : 'bg-clay')}
+          style={{ width: `${progress * 100}%` }}
+        />
+      </div>
+      <div className="mt-2 flex items-center justify-between text-[11px] text-ink/55 tnum">
+        <span>{currency(gate.currentAmount)} current</span>
+        <span>{currency(gate.targetAmount)} target</span>
+      </div>
+    </div>
+  );
+}
+
+function LeakageSection({ categories }: { categories: LeakageCategory[] }) {
+  return (
+    <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-center justify-between px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ember">
+            Lifestyle leakage
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            Categories tracking above cap
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 px-5 pb-5 md:grid-cols-3">
+        {categories.map((category) => (
+          <LeakageCard key={category.name} category={category} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function LeakageCard({ category }: { category: LeakageCategory }) {
+  const ratio = category.cap === 0 ? 0 : category.monthlyBurn / category.cap;
+  const overBy = category.monthlyBurn - category.cap;
+  const overage = ratio > 1;
+  const capPct = overage ? (category.cap / category.monthlyBurn) * 100 : Math.min(ratio * 100, 100);
+  const overPct = overage ? 100 - capPct : 0;
+  const overPercent = Math.round((ratio - 1) * 100);
+
+  return (
+    <div className="rounded-lg border border-ink/8 bg-paper/50 p-4">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[13px] font-medium leading-snug text-ink">{category.name}</p>
+        {overage ? (
+          <span className="shrink-0 rounded-full bg-ember/10 px-2 py-0.5 text-[11px] font-semibold text-ember tnum">
+            +{overPercent}%
+          </span>
+        ) : null}
+      </div>
+
+      <div className="relative mt-4 h-2 w-full overflow-hidden rounded-full bg-ink/[0.06]">
+        <div className="flex h-full w-full">
+          <div className="h-full bg-clay" style={{ width: `${capPct}%` }} />
+          <div className="h-full bg-ember" style={{ width: `${overPct}%` }} />
+        </div>
+      </div>
+      {overage ? (
+        <div className="relative -mt-3 mb-1 h-3">
+          <div
+            className="absolute top-0 h-3 w-px bg-ink/35"
+            style={{ left: `${capPct}%` }}
+          />
+        </div>
+      ) : null}
+
+      <div className="mt-1 flex items-center justify-between text-[11px] text-ink/55 tnum">
+        <span>
+          <b className="font-semibold text-ink">{currency(category.monthlyBurn)}</b> burn
+        </span>
+        <span>
+          {currency(category.cap)} cap
+          {overage ? <span className="text-ember"> · +{currency(overBy)} over</span> : null}
+        </span>
+      </div>
     </div>
   );
 }

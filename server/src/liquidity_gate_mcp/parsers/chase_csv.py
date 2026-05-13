@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import re
-from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from ..models import AccountReference, ParsedTransaction
+from ._base import ParseResult, SkippedRow, derive_statement_period
 
 
 PARSER_VERSION = "chase-csv-v1"
@@ -22,22 +21,10 @@ CHASE_ACCOUNT = AccountReference(
 )
 
 _DATE_FORMATS = ("%m/%d/%Y", "%m/%d/%y")
-_STATEMENT_PERIOD_RE = re.compile(r"(20\d{2})[-_](\d{1,2})")
 _PAYMENT_TYPE = "payment"
 
 
-@dataclass(frozen=True)
-class SkippedRow:
-    row_index: int
-    reason: str
-    raw: dict[str, str]
-
-
-@dataclass
-class ChaseParseResult:
-    transactions: list[ParsedTransaction] = field(default_factory=list)
-    skipped: list[SkippedRow] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
+ChaseParseResult = ParseResult
 
 
 def parse_chase_csv(file_path: Path) -> ChaseParseResult:
@@ -49,7 +36,7 @@ def parse_chase_csv(file_path: Path) -> ChaseParseResult:
     """
     result = ChaseParseResult()
     document_name = file_path.name
-    statement_period = _derive_statement_period(file_path.stem)
+    statement_period = derive_statement_period(file_path.stem)
 
     with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -163,17 +150,6 @@ def _source_record_key(occurred_on: date, amount: Decimal, description: str) -> 
     normalized_description = " ".join(description.split())
     payload = f"{occurred_on.isoformat()}|{amount}|{normalized_description}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def _derive_statement_period(stem: str) -> str | None:
-    match = _STATEMENT_PERIOD_RE.search(stem)
-    if not match:
-        return None
-    year = match.group(1)
-    month = int(match.group(2))
-    if not 1 <= month <= 12:
-        return None
-    return f"{year}-{month:02d}"
 
 
 def _normalize_header(name: str) -> str:

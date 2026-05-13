@@ -20,7 +20,9 @@ export default function App() {
       view={view}
       onViewChange={setView}
       totalDocuments={checklistQuery.data?.summary.totalItems ?? 0}
+      obtainedDocuments={checklistQuery.data?.summary.obtainedCount ?? 0}
       missingDocuments={checklistQuery.data?.summary.missingCount ?? 0}
+      liquidityGateCurrent={dashboardQuery.data?.gates[0]?.currentAmount ?? 0}
       liquidityGate={dashboardQuery.data?.gates[0]?.targetAmount ?? 80000}
     >
       {view === 'intake' ? (

@@ -12,7 +12,13 @@ from .models import (
     IngestRunTotals,
     ReconcileTransactionsRequest,
 )
-from .parsers import CHASE_PARSER_VERSION, ChaseParseResult, parse_chase_csv
+from .parsers import (
+    BEACON_PARSER_VERSION,
+    CHASE_PARSER_VERSION,
+    ParseResult,
+    parse_beacon_csv,
+    parse_chase_csv,
+)
 from .tools import (
     MATCH_THRESHOLD,
     iter_candidate_files,
@@ -25,17 +31,22 @@ from .tools import (
 class ParserRegistration:
     name: str
     version: str
-    parse: Callable[[Path], ChaseParseResult]
+    parse: Callable[[Path], ParseResult]
 
 
-# Add a new doc_id -> ParserRegistration entry to wire up another source
-# (e.g., "doc-002": ParserRegistration("beacon-csv", ...)). The dispatch
-# uses the existing tracker matcher to decide which parser owns a file.
+# Add a new doc_id -> ParserRegistration entry to wire up another source.
+# The dispatch uses the existing tracker matcher to decide which parser
+# owns a file.
 PARSERS: dict[str, ParserRegistration] = {
     "doc-001": ParserRegistration(
         name="chase-credit-card",
         version=CHASE_PARSER_VERSION,
         parse=parse_chase_csv,
+    ),
+    "doc-002": ParserRegistration(
+        name="beacon-checking",
+        version=BEACON_PARSER_VERSION,
+        parse=parse_beacon_csv,
     ),
 }
 

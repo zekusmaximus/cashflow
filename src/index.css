@@ -4,19 +4,25 @@
 
 :root {
   color: #162126;
-  background:
-    radial-gradient(circle at top left, rgba(199, 116, 79, 0.22), transparent 34%),
-    radial-gradient(circle at right 18%, rgba(78, 106, 87, 0.18), transparent 32%),
-    linear-gradient(180deg, #f8f5ee 0%, #ede7dc 100%);
+  background: #faf8f3;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+html, body {
+  background: #faf8f3;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
+  scrollbar-gutter: stable;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
 }
 
 #root {
