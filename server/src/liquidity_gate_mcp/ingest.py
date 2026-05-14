@@ -13,9 +13,11 @@ from .models import (
     ReconcileTransactionsRequest,
 )
 from .parsers import (
+    ALLY_PARSER_VERSION,
     BEACON_PARSER_VERSION,
     CHASE_PARSER_VERSION,
     ParseResult,
+    parse_ally_csv,
     parse_beacon_csv,
     parse_chase_csv,
 )
@@ -47,6 +49,11 @@ PARSERS: dict[str, ParserRegistration] = {
         name="beacon-checking",
         version=BEACON_PARSER_VERSION,
         parse=parse_beacon_csv,
+    ),
+    "doc-003": ParserRegistration(
+        name="ally-hysa",
+        version=ALLY_PARSER_VERSION,
+        parse=parse_ally_csv,
     ),
 }
 

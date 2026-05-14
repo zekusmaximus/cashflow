@@ -25,6 +25,10 @@ BeaconParseResult = ParseResult
 #
 # - chase\s+credit : payments made from checking to the Chase card.
 # - ally\s+bank\s*\$?transfer : sweeps from checking to the Ally HYSA.
+# - ally\s+bank\s+p2p : Ally-initiated P2P pulls from joint checking back
+#   into the Ally HYSA. Same flow as $TRANSFER but Ally tags the originating
+#   leg differently when it's initiated as a P2P request rather than a
+#   standing transfer.
 # - ionbank\s+online\s+xfr : internal IonBank-platform transfers between
 #   household accounts.
 #
@@ -34,6 +38,7 @@ BeaconParseResult = ParseResult
 TRANSFER_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"chase\s+credit", re.IGNORECASE),
     re.compile(r"ally\s+bank\s*\$?transfer", re.IGNORECASE),
+    re.compile(r"ally\s+bank\s+p2p", re.IGNORECASE),
     re.compile(r"ionbank\s+online\s+xfr", re.IGNORECASE),
 )
 
