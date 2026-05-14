@@ -7,7 +7,11 @@
       "Bash(server/.venv/Scripts/python.exe -c ' *)",
       "Bash(server/.venv/Scripts/python.exe -m pytest server/tests -q)",
       "Bash(server/.venv/Scripts/python.exe -m pip install pytest)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(npx vitest *)",
+      "Bash(powershell.exe -NoProfile -Command \"[Environment]::GetEnvironmentVariable\\('LIQUIDITY_GATE_DB_PATH','User'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(git add *)"
     ]
   }
 }

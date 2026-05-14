@@ -33,6 +33,12 @@ TRANSFER_ALLY_SWEEP = (
     '"2026-05-07T04:00:00+00:00","withdrawal","Ally Bank Transfer",-925.00,'
     '"DP-876321032","",24766.79,"ALLY BANK $TRANSFER 260507"\n'
 )
+# Ally-initiated P2P pull (inbound to Beacon side as a deposit, but still a
+# transfer from the household's perspective — pairs with an Ally outbound).
+TRANSFER_ALLY_P2P = (
+    '"2026-01-05T05:00:00+00:00","deposit","Ally Bank P2P",2500.00,'
+    '"DP-876321032","",30000.00,"ALLY BANK P2P 260105 JEFFREY A ZYJES"\n'
+)
 TRANSFER_IONBANK = (
     '"2026-05-12T04:00:00+00:00","withdrawal","Ionbank Online Transfer",-1775.00,'
     '"DP-876321032","",16903.06,"IonBank ONLINE XFR 260512"\n'
@@ -98,15 +104,24 @@ def test_known_transfer_patterns_override_sign(tmp_path: Path) -> None:
     csv_path = _write_beacon_csv(
         tmp_path,
         "beacon.csv",
-        TRANSFER_CHASE_PAYMENT + TRANSFER_ALLY_SWEEP + TRANSFER_IONBANK,
+        TRANSFER_CHASE_PAYMENT + TRANSFER_ALLY_SWEEP + TRANSFER_ALLY_P2P + TRANSFER_IONBANK,
     )
 
     result = parse_beacon_csv(csv_path)
 
-    assert [tx.direction for tx in result.transactions] == ["transfer", "transfer", "transfer"]
+    assert [tx.direction for tx in result.transactions] == [
+        "transfer",
+        "transfer",
+        "transfer",
+        "transfer",
+    ]
     # Amounts retain their original sign even when reclassified as transfers.
     assert result.transactions[0].amount == Decimal("-5000.00")
-    assert result.transactions[2].description_raw == "IonBank ONLINE XFR 260512"
+    # Ally P2P inbound keeps its positive sign — direction='transfer' does
+    # not flip the amount.
+    assert result.transactions[2].amount == Decimal("2500.00")
+    assert result.transactions[2].description_raw.startswith("ALLY BANK P2P")
+    assert result.transactions[3].description_raw == "IonBank ONLINE XFR 260512"
 
 
 def test_statement_period_derived_from_filename(tmp_path: Path) -> None:

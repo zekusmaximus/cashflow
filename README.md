@@ -12,7 +12,7 @@ Liquidity Gate is a local-first desktop workspace for reconstructing household c
 
 ## Repository layout
 
-- [docs/](docs/) — canonical planning references: the master index and the tracker CSV that drives the intake view.
+- [docs/](docs/) — canonical planning references: the master index, the tracker CSV that drives the intake view, and [PROJECT_STATUS.md](docs/PROJECT_STATUS.md) (living roadmap of what's built and what's next).
 - [src/](src/) — React UI: Document Intake and Cash Flow Dashboard.
 - [src-tauri/](src-tauri/) — Tauri v2 shell, Rust commands, plugin permissions.
 - [server/](server/) — Python MCP server, schema, and supporting models.
