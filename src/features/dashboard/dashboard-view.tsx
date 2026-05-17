@@ -1,6 +1,35 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 import { cn, currency, percent } from '../../lib/utils';
-import type { CashFlowMonth, DashboardSnapshot, LeakageCategory, LiquidityGate } from './types';
+import type {
+  CashFlowMonth,
+  DashboardSnapshot,
+  LeakageCategory,
+  LiquidityGate,
+  ReconciliationPeriod,
+} from './types';
+
+// Variance thresholds match master index §6 #2: zero or explained variance
+// is required before downstream tabs are trusted. Sub-cent slop is green,
+// $1–$10 is yellow (a real but small data gap), >$10 is red.
+const VARIANCE_GREEN_MAX = 1;
+const VARIANCE_YELLOW_MAX = 10;
+
+function varianceBadge(amount: number | null): 'green' | 'yellow' | 'red' | 'unknown' {
+  if (amount === null) return 'unknown';
+  const abs = Math.abs(amount);
+  if (abs < VARIANCE_GREEN_MAX) return 'green';
+  if (abs <= VARIANCE_YELLOW_MAX) return 'yellow';
+  return 'red';
+}
+
+function currencyCents(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
 
 interface DashboardViewProps {
   query: UseQueryResult<DashboardSnapshot, Error>;
@@ -23,7 +52,7 @@ export function DashboardView({ query }: DashboardViewProps) {
     );
   }
 
-  const { months, gates, leakageCategories } = query.data;
+  const { months, gates, leakageCategories, reconciliations } = query.data;
   const totalInflow = months.reduce((total, m) => total + m.inflow, 0);
   const totalOutflow = months.reduce((total, m) => total + m.outflow, 0);
   const netYtd = totalInflow - totalOutflow;
@@ -110,9 +139,144 @@ export function DashboardView({ query }: DashboardViewProps) {
         <GatesPanel gates={gates} />
       </div>
 
+      <ReconciliationSection periods={reconciliations} />
+
       <LeakageSection categories={leakageCategories} />
     </div>
   );
+}
+
+function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] }) {
+  return (
+    <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-center justify-between px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Reconciliation
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            Per-account variance — most recent period
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Opening + inflows − outflows = computed closing, compared against the
+            statement-reported closing balance. Variance must be zero (or
+            explained) before downstream tabs are trusted.
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 px-5 pb-5 md:grid-cols-2 xl:grid-cols-4">
+        {periods.length === 0 ? (
+          <div className="col-span-full rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
+            No reconciliation periods computed yet. Run the
+            <code className="mx-1 rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              reconcile_periods
+            </code>
+            MCP tool to populate.
+          </div>
+        ) : (
+          periods.map((period) => (
+            <ReconciliationCard key={period.accountId} period={period} />
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
+  const badge = varianceBadge(period.varianceAmount);
+  const isLiability = period.accountType === 'credit_card';
+  const closingLabel = isLiability ? 'amount owed' : 'balance';
+
+  const badgeStyles: Record<typeof badge, string> = {
+    green: 'bg-moss/12 text-moss',
+    yellow: 'bg-clay/12 text-clay',
+    red: 'bg-ember/12 text-ember',
+    unknown: 'bg-ink/[0.06] text-ink/55',
+  };
+
+  const badgeText =
+    badge === 'unknown'
+      ? 'No statement'
+      : period.varianceAmount === 0
+        ? 'Reconciled'
+        : `${period.varianceAmount! > 0 ? '+' : ''}${currencyCents(period.varianceAmount!)}`;
+
+  return (
+    <div className="rounded-lg border border-ink/8 bg-paper/50 p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[13px] font-medium leading-snug text-ink">
+            {period.accountLabel}
+          </p>
+          <p className="mt-0.5 text-[11px] uppercase tracking-[0.16em] text-ink/45">
+            {period.periodStart} → {period.periodEnd}
+          </p>
+        </div>
+        <span
+          className={cn(
+            'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tnum',
+            badgeStyles[badge],
+          )}
+        >
+          {badgeText}
+        </span>
+      </div>
+
+      <dl className="mt-3 space-y-1 text-[11px] tnum">
+        <BalanceRow
+          label={`Opening ${closingLabel}`}
+          value={period.statementOpeningBalance}
+        />
+        <BalanceRow
+          label={`Computed ${closingLabel}`}
+          value={period.computedClosingBalance}
+        />
+        <BalanceRow
+          label={`Statement ${closingLabel}`}
+          value={period.statementClosingBalance}
+          muted={period.closingBalanceSource === null}
+        />
+      </dl>
+
+      {period.closingBalanceSource ? (
+        <p className="mt-2 text-[10px] uppercase tracking-[0.16em] text-ink/40">
+          Source · {sourceLabel(period.closingBalanceSource)}
+        </p>
+      ) : null}
+
+      {period.varianceExplanation ? (
+        <p className="mt-2 text-[11px] italic leading-relaxed text-ink/65">
+          {period.varianceExplanation}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function BalanceRow({
+  label,
+  value,
+  muted = false,
+}: {
+  label: string;
+  value: number | null;
+  muted?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <dt className="text-ink/55">{label}</dt>
+      <dd className={cn('font-medium', muted ? 'text-ink/35' : 'text-ink')}>
+        {value === null ? '—' : currency(value)}
+      </dd>
+    </div>
+  );
+}
+
+function sourceLabel(source: string): string {
+  if (source === 'metadata_running_balance') return 'CSV running balance';
+  if (source === 'balances_toml') return 'balances.toml';
+  return source;
 }
 
 function RangeButton({

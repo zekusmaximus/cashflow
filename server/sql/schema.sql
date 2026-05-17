@@ -127,6 +127,26 @@ CREATE TABLE IF NOT EXISTS liquidity_gates (
   notes TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS reconciliation_periods (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  statement_opening_balance REAL,
+  statement_closing_balance REAL,
+  closing_balance_source TEXT,
+  computed_inflows REAL NOT NULL DEFAULT 0,
+  computed_outflows REAL NOT NULL DEFAULT 0,
+  computed_transfers_in REAL NOT NULL DEFAULT 0,
+  computed_transfers_out REAL NOT NULL DEFAULT 0,
+  computed_closing_balance REAL,
+  variance_amount REAL,
+  variance_explanation TEXT NOT NULL DEFAULT '',
+  computed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (account_id, period_start, period_end),
+  FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
 CREATE VIEW IF NOT EXISTS monthly_cashflow_summary AS
 SELECT
   substr(occurred_on, 1, 7) AS month,

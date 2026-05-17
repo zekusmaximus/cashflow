@@ -4,10 +4,17 @@ import atexit
 
 from mcp.server.fastmcp import FastMCP
 
+from .balances import load_balances
 from .config import load_settings
 from .database import DatabaseManager
 from .ingest import ingest_watch_root as ingest_watch_root_impl
-from .models import PairTransfersRequest, ReconcileTransactionsRequest, SqlQueryRequest
+from .models import (
+    PairTransfersRequest,
+    ReconcilePeriodsRequest,
+    ReconcileTransactionsRequest,
+    SqlQueryRequest,
+)
+from .reconciliation import reconcile_periods as reconcile_periods_impl
 from .tools import (
     query_cashflow_data as query_cashflow_data_impl,
     read_document_metadata as read_document_metadata_impl,
@@ -77,6 +84,13 @@ def ingest_documents(folder_path: str | None = None) -> dict:
 def pair_transfers(request: dict | None = None) -> dict:
     parsed_request = PairTransfersRequest.model_validate(request or {})
     return pair_transfers_impl(database, parsed_request).model_dump()
+
+
+@mcp.tool()
+def reconcile_periods(request: dict) -> dict:
+    parsed_request = ReconcilePeriodsRequest.model_validate(request)
+    balances = load_balances(settings.watch_root)
+    return reconcile_periods_impl(database, balances, parsed_request).model_dump()
 
 
 def main() -> None:

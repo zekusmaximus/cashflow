@@ -3,6 +3,7 @@ import type {
   DashboardSnapshot,
   LeakageCategory,
   LiquidityGate,
+  ReconciliationPeriod,
 } from '../features/dashboard/types';
 import { dashboardMock } from '../features/dashboard/mock';
 import { isTauriRuntime } from '../lib/tauri';
@@ -234,6 +235,20 @@ interface LeakageRow {
   cap: number | null;
 }
 
+interface ReconciliationRow {
+  accountId: string;
+  accountLabel: string;
+  accountType: string;
+  periodStart: string;
+  periodEnd: string;
+  statementOpeningBalance: number | null;
+  statementClosingBalance: number | null;
+  closingBalanceSource: string | null;
+  computedClosingBalance: number | null;
+  varianceAmount: number | null;
+  varianceExplanation: string | null;
+}
+
 function monthLabel(month: string): string {
   const [, monthPart] = month.split('-');
   const idx = Math.max(0, Math.min(11, Number(monthPart) - 1));
@@ -294,10 +309,55 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     cap: row.cap ?? 0,
   }));
 
+  // Latest reconciliation row per account. The subquery picks the max
+  // period_end per account_id so the dashboard always shows the freshest
+  // variance even when older months have also been reconciled.
+  const reconciliationRows = await database.select<ReconciliationRow>(
+    `SELECT rp.account_id        AS accountId,
+            (a.institution || ' · ' || a.account_name) AS accountLabel,
+            a.account_type        AS accountType,
+            rp.period_start       AS periodStart,
+            rp.period_end         AS periodEnd,
+            rp.statement_opening_balance AS statementOpeningBalance,
+            rp.statement_closing_balance AS statementClosingBalance,
+            rp.closing_balance_source    AS closingBalanceSource,
+            rp.computed_closing_balance  AS computedClosingBalance,
+            rp.variance_amount    AS varianceAmount,
+            rp.variance_explanation AS varianceExplanation
+       FROM reconciliation_periods rp
+       JOIN accounts a ON a.id = rp.account_id
+       JOIN (
+         SELECT account_id, MAX(period_end) AS latest_end
+           FROM reconciliation_periods
+          GROUP BY account_id
+       ) latest
+         ON latest.account_id = rp.account_id
+        AND latest.latest_end = rp.period_end
+      ORDER BY a.institution ASC, a.account_name ASC`,
+  );
+
+  const reconciliations: ReconciliationPeriod[] = reconciliationRows.map((row) => ({
+    accountId: row.accountId,
+    accountLabel: row.accountLabel,
+    accountType: row.accountType,
+    periodStart: row.periodStart,
+    periodEnd: row.periodEnd,
+    statementOpeningBalance: row.statementOpeningBalance,
+    statementClosingBalance: row.statementClosingBalance,
+    closingBalanceSource: row.closingBalanceSource,
+    computedClosingBalance: row.computedClosingBalance,
+    varianceAmount: row.varianceAmount,
+    varianceExplanation: row.varianceExplanation ?? '',
+  }));
+
   // If there is no real data at all, return the explicit demo fallback so the
   // empty dashboard still communicates expected composition. Once any real
-  // data lands (months/gates/leakage), use only what's in the database.
-  const hasRealData = months.length > 0 || gates.length > 0 || leakageCategories.length > 0;
+  // data lands (months/gates/leakage/reconciliations), use only what's in the DB.
+  const hasRealData =
+    months.length > 0 ||
+    gates.length > 0 ||
+    leakageCategories.length > 0 ||
+    reconciliations.length > 0;
   if (!hasRealData) {
     return { ...dashboardMock };
   }
@@ -306,5 +366,6 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     months,
     gates,
     leakageCategories,
+    reconciliations,
   };
 }
