@@ -5,25 +5,37 @@ Liquidity Gate household cash-flow workspace. Update this file as work
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-13
+**Last updated:** 2026-05-17
 
 ## Snapshot
 
-End-to-end pipeline works for three account types: drop a Chase, Beacon,
-or Ally HYSA CSV in the watch root, the Tauri app auto-matches and shows
-ingestion counts, the dashboard reflects real numbers, and Claude Desktop
-can call the MCP server's tools to refresh and analyze. ~1,080 real
-transactions in the local SQLite (924 Chase + 137 Beacon + 19 Ally).
-Cross-account transfer pairing operational; all 11 Beacon ↔ Ally HYSA
-flows pair cleanly after the Beacon parser was extended to recognize the
-`ALLY BANK P2P` description variant. The next major unblock is Ashley's
-separate checking so the remaining inflow side of the dashboard fills in.
+End-to-end pipeline works for four account types: drop a Chase, Beacon,
+Ally HYSA, or Webster (Ashley) CSV in the watch root, the Tauri app
+auto-matches and shows ingestion counts, the dashboard reflects real
+numbers, and Claude Desktop can call the MCP server's tools to refresh
+and analyze. Real-DB run on 2026-05-17 produced 31 cross-account pairs
+(including the 5×5 Webster → Beacon cluster on 2026-01-21, which the
+connected-components fallback retires deterministically) and 12 fresh
+Chase rows from the same-day dedup recovery. ~1,144 transactions now
+in the local SQLite (936 Chase + 137 Beacon + 19 Ally + 52 Webster).
 
-**Next single task** (lowest-friction unblock): Ashley separate checking
-parser (doc-004). Three Ally HYSA inbound transfers ($4,500 on 1/5,
-$5,080 on 4/8, $1,000 on 5/8) currently have no Beacon counterpart and
-likely originate from Ashley's checking — doc-004 is what closes the loop
-on those.
+**Residual diagnostic surface** (25 unpaired + 4 ambiguous) splits into
+three categories that each need a different fix, captured in detail in
+auto-memory `unpaired-transfer-diagnostics`:
+
+1. **IonBank ONLINE XFR (~14 Beacon rows)** — partner account not yet
+   ingested. Resolved when the other IonBank account's CSV arrives.
+2. **Ally bonus-check / direct-deposit inbounds (3 rows)** — Ally parser
+   regex is greedy and tags real inflows as transfer. Fix path: parser
+   refinement OR classifier override OR manual mark.
+3. **Multi-leg same-day Webster/Beacon ambiguity (4 + 4 rows on 2/25,
+   2/27, 4/3, 4/6)** — same amount on multiple legs with mixed clearing
+   delays. Algorithm can't deterministically choose without
+   description-aware pairing or manual triage.
+
+**Next single task**: reconciliation tab (#1) — opening/closing balance
+schema, per-account variance UI in the dashboard. Highest value because
+it surfaces bad data before downstream tabs propagate it.
 
 ## Architecture (one-screen reminder)
 
@@ -71,6 +83,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Chase credit-card CSV parser ([parsers/chase_csv.py](../server/src/liquidity_gate_mcp/parsers/chase_csv.py))
   - [x] Type=Payment → direction='transfer'
   - [x] Idempotent SHA-256 source_record_key
+  - [x] `|seqN` suffix disambiguates duplicate same-day same-amount same-description rows while the first occurrence keeps the legacy hash (backwards-compat)
   - [x] Pending rows skipped
 - [x] Beacon checking CSV parser ([parsers/beacon_csv.py](../server/src/liquidity_gate_mcp/parsers/beacon_csv.py))
   - [x] Four transfer regexes (CHASE CREDIT CRD, ALLY BANK $TRANSFER, ALLY BANK P2P, IonBank ONLINE XFR)
@@ -81,12 +94,18 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
   - [x] Time-in-source-key tiebreaker (Ally has no running balance column)
   - [x] Transfer regexes for "Requested transfer from/to" patterns
   - [x] Interest Paid stays inflow; external Zelle stays outflow
+- [x] Webster checking CSV parser ([parsers/webster_csv.py](../server/src/liquidity_gate_mcp/parsers/webster_csv.py))
+  - [x] Ashley-owned account (`owner="ashley"`, `household_role="ashley"`)
+  - [x] Split Debit/Credit columns combined; running balance preserved in metadata
+  - [x] Transfer regexes for `CHASE CREDIT CRD EPAY` and `CK TRANSFER … ASHLEY M CALABR`
+  - [x] FID MoneyLine inbounds (RSU proceeds) and Venmo/PayPal outflows left for the classifier, not auto-tagged
 - [x] Registry-based parser dispatch ([ingest.py](../server/src/liquidity_gate_mcp/ingest.py))
   - [x] One-line additions for new institutions
 
 ### Cross-account analysis
 - [x] Transfer-pair detector ([transfers.py](../server/src/liquidity_gate_mcp/transfers.py))
   - [x] Mutual-best-match algorithm (both sides must see each other as unique closest partner)
+  - [x] Connected-components cluster fallback: each cents bucket is split into best_partners-linked components, then any component with two accounts, equal row counts, opposite signs, and mutual best_partners pairs 1-to-1 by stable id-sort. Retires the 2026-01-21 cluster (5 Webster outbounds paired with 5 Beacon inbounds two days later) without false-pairing unrelated $5K rows elsewhere in the bucket.
   - [x] Idempotent
   - [x] Surfaces unpaired and ambiguous rows for diagnosis
   - [x] Optional suspected_untagged report for parser regex gaps
@@ -114,51 +133,46 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 
 Roughly ordered by value-per-effort. Items higher up unblock items below.
 
-### 1. Ashley separate checking parser (doc-004) — UNBLOCKED, NEXT
-- [ ] `parsers/ashley_csv.py` (need a real CSV first — verify column shape)
-- [ ] Add `WEBSTR CK WEBXFR P2P` style transfer regex if descriptions confirm Ashley→joint flows
-- [ ] Tests
-- [ ] Re-run `pair_transfers` — WEBSTR/CALABR pairs should resolve, plus the three known orphan Ally inbounds ($4,500 1/5, $5,080 4/8, $1,000 5/8) suspected to originate from Ashley
+### 1. Reconciliation tab
 
-### 2. Reconciliation tab
 - [ ] New schema element for opening/closing per account per period
 - [ ] Beacon's running_balance in metadata_json gives free per-row balance check
 - [ ] UI surface in dashboard: per account, computed end vs statement end
 - [ ] Variance must be zero (or explicitly explained) before downstream tabs are trusted
 - [ ] Master index §6 #2
 
-### 3. Rule-based classifier
+### 2. Rule-based classifier
 - [ ] `classification_rules` table: regex over `description_raw` → (primary_category, subcategory, treatment, household_role, recurrence, confidence)
 - [ ] Classifier module that scans transactions and writes classifications
 - [ ] Manual override UI for unclassified rows
 - [ ] Master index §7
 - [ ] Aim: ~60% auto-classification, rest in triage queue
 
-### 4. Paystub PDF extraction
+### 3. Paystub PDF extraction
 - [ ] Decide: LLM-based (privacy tradeoff) vs local OCR + per-employer templates
 - [ ] One extractor handles all employers with a JSON schema (gross, 401k, HSA, federal/state/FICA, RSU withholding, net)
 - [ ] Per-paystub data lands in transactions or a new payroll_events table
 - [ ] Required for capital-plan feasibility tests in master index §10
 
-### 5. Normalization layer
+### 4. Normalization layer
 - [ ] `sinking_funds` table (annual premiums → monthly reserve)
 - [ ] Event-income tagging on transactions (bonus, RSU, refund)
 - [ ] Normalized monthly view alongside `monthly_cashflow_summary`
 - [ ] Master index §8
 
-### 6. Forward projection engine
+### 5. Forward projection engine
 - [ ] Project through 12/31/2027
 - [ ] Inputs: net pay, fixed obligations, premiums, rental, expected RSU events
 - [ ] Output: HYSA balance trajectory, projected $80K gate date, capital-plan feasibility status
 - [ ] Master index §10
 
-### 7. Appendix export
+### 6. Appendix export
 - [ ] Generate `2026_Household_Cashflow_Reality_Appendix.md` from analyzed data
 - [ ] Sections per master index §11
 - [ ] Expose as MCP tool so Claude can produce on demand
 - [ ] **This is the actual project deliverable**
 
-### 8. Dashboard build-out
+### 7. Dashboard build-out
 - [ ] 14 sections per master index §6 (currently only 3 cards)
 - [ ] Reconciliation status banner
 - [ ] Transaction Register with classification edit
@@ -168,16 +182,13 @@ Roughly ordered by value-per-effort. Items higher up unblock items below.
 
 ## Known issues and loose ends
 
-- [ ] **Chase same-day dedup collapse.** 12 transactions collapsed because `source_record_key` hashes (date, amount, description) and Chase had identical same-day micro-charges. Beacon avoids this by including running balance. Fix on Chase side (if ever needed): add per-row sequence number to the hash.
-- [ ] **Untagged transfer patterns from Beacon parser** (require Ally/Ashley CSVs to confirm via pair detector):
-  - `WEBSTR CK WEBXFR P2P` involving "ASHLEY M CALABR"
+- [ ] **Chase same-day dedup backfill.** Fixed in code: a backwards-compatible `|seqN` suffix now disambiguates duplicate (date, amount, description) rows within a file, while the first occurrence keeps the legacy hash so already-ingested rows still match on re-import. The 12 collapsed rows from the original Chase ingest remain absent in the DB; they'll appear automatically next time the Chase CSV is re-exported and re-ingested. No data backfill needed otherwise.
+- [ ] **Untagged transfer patterns from Beacon parser** (need classifier work, not regex):
   - `FID BKG SVC LLC MONEYLINE` (Fidelity sweeps, often $15)
   - `VENMO PAYMENT`
   - `MOBILE CHECK DEP`
 - [ ] **Project custom instructions not yet pasted in claude.ai.** Paste the current contents of [.claudecowork/agent.md](../.claudecowork/agent.md) into the cashflow Project's custom instructions so every chat auto-loads the persona. (The persona itself was updated 2026-05-13 to reference the `docs://master-index` and `docs://tracker` MCP resources instead of file paths.)
-- [ ] **Three Ally HYSA inbound transfers have no Beacon counterpart and are presumed Ashley-sourced.** Verified via DB query 2026-05-13: $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). No Beacon row exists at any date with those amounts. Most likely originate from Ashley's separate checking (her usual pattern is paying Chase and depositing to Beacon, but Ally pulls would also fit — Ally records the destination account holder in the description, not the source). These will pair automatically once doc-004 (Ashley parser) ingests the matching outflows. Not a code issue; a data-coverage gap.
-- [ ] **Tauri bundle resource entry now unused.** [src-tauri/tauri.conf.json:29](../src-tauri/tauri.conf.json#L29) still bundles the tracker CSV as a Tauri resource, but the loader now fetches via Vite. Remove for tidiness when convenient.
-- [ ] **Ambient module declarations now partially unused.** [src/types/ambient-modules.d.ts](../src/types/ambient-modules.d.ts) still declares `@tauri-apps/api/path` and `@tauri-apps/plugin-fs` from the original (broken) dynamic-import pattern. Clean up if no longer needed.
+- [ ] **Three Ally HYSA inbound transfers have no Beacon counterpart.** Verified via DB query 2026-05-13: $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). The 1/5 row is **Jeff's bonus check deposit** (confirmed 2026-05-17) — classify as event income, not a transfer. The 4/8 and 5/8 rows are still unconfirmed origin; the 4/8 $5,080 is close to but not equal to Webster's 4/6 $5,000 `CK TRANSFER` outbound, so amount-based pairing won't catch it. Likely need explicit document confirmation rather than pattern-matching.
 
 ## How to update this file
 

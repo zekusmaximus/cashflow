@@ -2,7 +2,7 @@ Category,Document,Subject Matter,Format,Priority,Source / Where to Get,Why Neede
 A. Core Transactions,Chase credit-card statements - all 2026 YTD,Discretionary spending,CSV,Essential,Chase.com download center,Main discretionary and semi-discretionary spending source,☐,,
 A. Core Transactions,Beacon checking statements - all 2026 YTD,Banking activity,CSV,Essential,Beacon online banking,"Payroll deposits, mortgage payments, credit-card payments, checks, transfers",☐,,
 A. Core Transactions,Ally HYSA statements - all 2026 YTD,Savings activity,CSV,Essential,Ally.com,"HYSA build, transfers, interest, Roth/liquidity gate tracking",☐,,
-A. Core Transactions,Ashley separate checking account statements,Banking activity,CSV / PDF,Essential if active,Ashley's bank portal,"Needed if Ashley income, reimbursements, bills, or transfers bypass Beacon",☐,,
+A. Core Transactions,Ashley Webster checking statements - all 2026 YTD,Banking activity,CSV / PDF,Essential if active,Webster Bank online portal,"Ashley income, reimbursements, bills, and transfers to Beacon that bypass joint checking",☐,,
 A. Core Transactions,Other credit cards used in 2026,Discretionary spending,CSV,Essential if any,Card issuer portals,"Even small cards can hide subscriptions, travel, insurance, or Amazon spend",☐,,
 A. Core Transactions,Venmo / PayPal / Zelle / Cash App history,P2P payments,CSV / Export,Useful,Each app's export tool,"Grooming tips, reimbursements, small recurring lifestyle leakage",☐,,
 A. Core Transactions,Amazon order history export,Itemized purchases,CSV,Very Useful,Amazon.com order history report,"Chase says Amazon, but not what was bought",☐,,

@@ -43,6 +43,13 @@ TRANSFER_IONBANK = (
     '"2026-05-12T04:00:00+00:00","withdrawal","Ionbank Online Transfer",-1775.00,'
     '"DP-876321032","",16903.06,"IonBank ONLINE XFR 260512"\n'
 )
+# WEBSTR P2P inbound from Ashley's Webster checking. Master index §3
+# classifies Ashley -> joint as a household-funding transfer; pairs with
+# Webster's `CK TRANSFER … ASHLEY M CALABRESE` outbound.
+TRANSFER_WEBSTR_ASHLEY = (
+    '"2026-01-22T05:00:00+00:00","deposit","Webster P2P",5000.00,'
+    '"DP-876321032","",30000.00,"WEBSTR CK WEBXFR P2P ASHLEY M CALABR 260122"\n'
+)
 # Two same-day, same-amount FID rows. They share (date, amount, description)
 # and only the running balance differs — exercises the balance-in-hash rule.
 DUPLICATE_FID_A = (
@@ -104,12 +111,17 @@ def test_known_transfer_patterns_override_sign(tmp_path: Path) -> None:
     csv_path = _write_beacon_csv(
         tmp_path,
         "beacon.csv",
-        TRANSFER_CHASE_PAYMENT + TRANSFER_ALLY_SWEEP + TRANSFER_ALLY_P2P + TRANSFER_IONBANK,
+        TRANSFER_CHASE_PAYMENT
+        + TRANSFER_ALLY_SWEEP
+        + TRANSFER_ALLY_P2P
+        + TRANSFER_IONBANK
+        + TRANSFER_WEBSTR_ASHLEY,
     )
 
     result = parse_beacon_csv(csv_path)
 
     assert [tx.direction for tx in result.transactions] == [
+        "transfer",
         "transfer",
         "transfer",
         "transfer",
@@ -122,6 +134,11 @@ def test_known_transfer_patterns_override_sign(tmp_path: Path) -> None:
     assert result.transactions[2].amount == Decimal("2500.00")
     assert result.transactions[2].description_raw.startswith("ALLY BANK P2P")
     assert result.transactions[3].description_raw == "IonBank ONLINE XFR 260512"
+    # WEBSTR inbound from Ashley's Webster checking keeps positive sign.
+    assert result.transactions[4].amount == Decimal("5000.00")
+    assert result.transactions[4].description_raw.startswith(
+        "WEBSTR CK WEBXFR P2P ASHLEY M CALABR"
+    )
 
 
 def test_statement_period_derived_from_filename(tmp_path: Path) -> None:

@@ -11,7 +11,12 @@
       "Bash(npx vitest *)",
       "Bash(powershell.exe -NoProfile -Command \"[Environment]::GetEnvironmentVariable\\('LIQUIDITY_GATE_DB_PATH','User'\\)\")",
       "Bash(.venv/Scripts/python.exe -c ' *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_transfer_pairing.py -v)",
+      "Bash(.venv/Scripts/python.exe -c \"from liquidity_gate_mcp.config import load_settings; s = load_settings\\(\\); print\\('watch:', s.watch_root\\); print\\('db:', s.database_path\\); print\\('tracker:', s.tracker_csv_path\\)\")",
+      "Bash(.venv/Scripts/python.exe _tmp_run_pair.py)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_transfer_pairing.py -q)"
     ]
   }
 }

@@ -18,6 +18,12 @@ from .chase_csv import (
     ChaseParseResult,
     parse_chase_csv,
 )
+from .webster_csv import (
+    PARSER_VERSION as WEBSTER_PARSER_VERSION,
+    WEBSTER_CHECKING_ACCOUNT,
+    WebsterParseResult,
+    parse_webster_csv,
+)
 
 __all__ = [
     "ALLY_HYSA_ACCOUNT",
@@ -30,7 +36,11 @@ __all__ = [
     "ChaseParseResult",
     "ParseResult",
     "SkippedRow",
+    "WEBSTER_CHECKING_ACCOUNT",
+    "WEBSTER_PARSER_VERSION",
+    "WebsterParseResult",
     "parse_ally_csv",
     "parse_beacon_csv",
     "parse_chase_csv",
+    "parse_webster_csv",
 ]

@@ -358,24 +358,24 @@ def test_non_transfer_rows_surface_in_diagnostics_only(database: DatabaseManager
     # never in unpaired, and the DB must be untouched on that row.
     _insert_transaction(
         database,
-        transaction_id="tx-webster",
-        account_id="acct-webster",
+        transaction_id="tx-fid",
+        account_id="acct-fidelity",
         occurred_on=date(2026, 4, 16),
         amount=-750.0,
         direction="outflow",
-        description="WEBSTR CK WEBXFR P2P ASHLEY M CALABR",
+        description="FID BKG SVC LLC MONEYLINE",
     )
 
     result = pair_transfers(database, PairTransfersRequest())
     assert result.pairs_created == 1
-    assert "tx-webster" not in {u.transaction_id for u in result.unpaired}
+    assert "tx-fid" not in {u.transaction_id for u in result.unpaired}
 
     untagged_ids = {s.transaction_id for s in result.suspected_untagged}
-    assert "tx-webster" in untagged_ids
-    webster = next(s for s in result.suspected_untagged if s.transaction_id == "tx-webster")
-    assert webster.confidence == "strong"
+    assert "tx-fid" in untagged_ids
+    fid = next(s for s in result.suspected_untagged if s.transaction_id == "tx-fid")
+    assert fid.confidence == "strong"
     keys = _fetch_keys(database)
-    assert keys["tx-webster"] is None
+    assert keys["tx-fid"] is None
 
 
 def test_diagnostics_disabled_returns_empty_list(database: DatabaseManager) -> None:
@@ -397,12 +397,12 @@ def test_diagnostics_disabled_returns_empty_list(database: DatabaseManager) -> N
     )
     _insert_transaction(
         database,
-        transaction_id="tx-webster",
-        account_id="acct-webster",
+        transaction_id="tx-fid",
+        account_id="acct-fidelity",
         occurred_on=date(2026, 4, 15),
         amount=-900.0,
         direction="outflow",
-        description="WEBSTR CK WEBXFR P2P ASHLEY M CALABR",
+        description="FID BKG SVC LLC MONEYLINE",
     )
 
     result = pair_transfers(
@@ -410,6 +410,276 @@ def test_diagnostics_disabled_returns_empty_list(database: DatabaseManager) -> N
     )
     assert result.pairs_created == 1
     assert result.suspected_untagged == []
+
+
+def test_nxn_same_day_cluster_pairs_one_to_one(database: DatabaseManager) -> None:
+    # The real-world driver: five $5,000 Webster -> Beacon CK TRANSFER rows
+    # on the same day. Mutual-best-match alone leaves all 10 ambiguous; the
+    # cluster fallback retires them as five 1-to-1 pairs.
+    for i in range(5):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-webster-{i}",
+            account_id="acct-webster",
+            occurred_on=date(2026, 1, 21),
+            amount=-5000.0,
+            direction="transfer",
+            description=f"ASHLEY M CALA CK TRANSFER ASHLEY M CALABRESE 1631829{i:04d}",
+        )
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-beacon-{i}",
+            account_id="acct-beacon",
+            occurred_on=date(2026, 1, 21),
+            amount=5000.0,
+            direction="transfer",
+            description=f"WEBSTR CK WEBXFR P2P ASHLEY M CALABR 26012{i}",
+        )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 5
+    assert result.ambiguous == []
+    assert result.unpaired == []
+
+    keys = _fetch_keys(database)
+    # Every row has a transfer_group_key now.
+    assert all(keys[f"tx-webster-{i}"] is not None for i in range(5))
+    assert all(keys[f"tx-beacon-{i}"] is not None for i in range(5))
+    # Each Webster row shares its key with exactly one Beacon row.
+    webster_keys = {keys[f"tx-webster-{i}"] for i in range(5)}
+    beacon_keys = {keys[f"tx-beacon-{i}"] for i in range(5)}
+    assert webster_keys == beacon_keys
+    assert len(webster_keys) == 5  # five distinct pair-keys
+
+
+def test_nxn_cluster_idempotent_on_rerun(database: DatabaseManager) -> None:
+    for i in range(3):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-a-{i}",
+            account_id="acct-a",
+            occurred_on=date(2026, 4, 10),
+            amount=-2500.0,
+            direction="transfer",
+        )
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-b-{i}",
+            account_id="acct-b",
+            occurred_on=date(2026, 4, 10),
+            amount=2500.0,
+            direction="transfer",
+        )
+
+    first = pair_transfers(database, PairTransfersRequest())
+    assert first.pairs_created == 3
+
+    second = pair_transfers(database, PairTransfersRequest())
+    assert second.pairs_created == 0
+    assert second.already_paired_skipped == 6
+    assert second.ambiguous == []
+
+
+def test_cluster_count_mismatch_stays_ambiguous(database: DatabaseManager) -> None:
+    # 3 Webster outflows + 2 Beacon inflows on the same day, same amount.
+    # Counts don't match -> cluster rule must not fire; everything stays
+    # ambiguous for human review.
+    for i in range(3):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-w-{i}",
+            account_id="acct-webster",
+            occurred_on=date(2026, 2, 25),
+            amount=-5000.0,
+            direction="transfer",
+        )
+    for i in range(2):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-b-{i}",
+            account_id="acct-beacon",
+            occurred_on=date(2026, 2, 25),
+            amount=5000.0,
+            direction="transfer",
+        )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+    ambiguous_ids = {a.transaction_id for a in result.ambiguous}
+    assert ambiguous_ids == {f"tx-w-{i}" for i in range(3)} | {f"tx-b-{i}" for i in range(2)}
+    keys = _fetch_keys(database)
+    assert all(keys[tx_id] is None for tx_id in ambiguous_ids)
+
+
+def test_cluster_three_accounts_stays_ambiguous(database: DatabaseManager) -> None:
+    # Same amount + date across three accounts. Cluster rule requires
+    # exactly two accounts; otherwise we cannot tell which account is the
+    # actual partner.
+    for tag in ("webster", "beacon", "ally"):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-{tag}-0",
+            account_id=f"acct-{tag}",
+            occurred_on=date(2026, 3, 16),
+            amount=-1000.0 if tag == "webster" else 1000.0,
+            direction="transfer",
+        )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+    ambiguous_ids = {a.transaction_id for a in result.ambiguous}
+    assert "tx-webster-0" in ambiguous_ids
+
+
+def test_cluster_same_sign_does_not_pair(database: DatabaseManager) -> None:
+    # Defensive: two outflows on two different accounts that happen to
+    # match in bucket+date must not pair. Real transfer pairs always have
+    # opposite signs (one debits, the other credits).
+    for i in range(2):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-a-{i}",
+            account_id="acct-a",
+            occurred_on=date(2026, 3, 1),
+            amount=-300.0,
+            direction="transfer",
+        )
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-b-{i}",
+            account_id="acct-b",
+            occurred_on=date(2026, 3, 1),
+            amount=-300.0,
+            direction="transfer",
+        )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+
+
+def test_cluster_isolates_subgroup_from_unrelated_bucket_noise(
+    database: DatabaseManager,
+) -> None:
+    # The real-data 2026-01-21 case: 5 Webster outbounds + 5 Beacon
+    # inbounds 2 days later form a coherent cluster, but the same cents
+    # bucket also contains unrelated $5K rows from other dates that pull
+    # a third account in. Connected-components must isolate the cluster.
+    for i in range(5):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-w-{i}",
+            account_id="acct-webster",
+            occurred_on=date(2026, 1, 21),
+            amount=-5000.0,
+            direction="transfer",
+        )
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-b-{i}",
+            account_id="acct-beacon",
+            occurred_on=date(2026, 1, 23),
+            amount=5000.0,
+            direction="transfer",
+        )
+    # Unrelated noise in the same cents bucket — Chase $5K weeks later,
+    # plus an ambiguous Beacon row pointing at unpaired Webster outbounds
+    # on a separate date. Tolerance keeps these out of the 1/21 cluster's
+    # best_partners but they share the bucket.
+    _insert_transaction(
+        database,
+        transaction_id="tx-chase-far",
+        account_id="acct-chase",
+        occurred_on=date(2026, 4, 3),
+        amount=5000.0,
+        direction="transfer",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-w-far-a",
+        account_id="acct-webster",
+        occurred_on=date(2026, 4, 6),
+        amount=-5000.0,
+        direction="transfer",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-w-far-b",
+        account_id="acct-webster",
+        occurred_on=date(2026, 4, 6),
+        amount=-5000.0,
+        direction="transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    # The 1/21 ↔ 1/23 cluster pairs 1-to-1 (5 pairs).
+    keys = _fetch_keys(database)
+    cluster_keys = {keys[f"tx-w-{i}"] for i in range(5)} | {
+        keys[f"tx-b-{i}"] for i in range(5)
+    }
+    assert None not in cluster_keys
+    assert result.pairs_created >= 5
+    # The far Chase row sees both 4/6 Webster rows as best partners
+    # (delta=3 tie), so it stays ambiguous; the unrelated subgroup must
+    # not have pulled the 1/21 cluster's rows into its own component.
+    paired_ids = {tx for tx, key in keys.items() if key is not None}
+    assert paired_ids.issuperset({f"tx-w-{i}" for i in range(5)})
+    assert paired_ids.issuperset({f"tx-b-{i}" for i in range(5)})
+
+
+def test_cluster_partial_subgroup_does_not_pair(database: DatabaseManager) -> None:
+    # 3 Webster on 1/21 + 2 Webster on 1/22 vs 2 Beacon on 1/21 +
+    # 3 Beacon on 1/22. The bucket totals are 5+5 but the within-date
+    # subgroups (3/2 and 2/3) don't form a clean cluster — each row's
+    # best_partners is only the matching-date partners (delta=0 wins over
+    # delta=1), so the mutual-set check fails. Stays ambiguous.
+    for i in range(3):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-w-21-{i}",
+            account_id="acct-webster",
+            occurred_on=date(2026, 1, 21),
+            amount=-5000.0,
+            direction="transfer",
+        )
+    for i in range(2):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-w-22-{i}",
+            account_id="acct-webster",
+            occurred_on=date(2026, 1, 22),
+            amount=-5000.0,
+            direction="transfer",
+        )
+    for i in range(2):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-b-21-{i}",
+            account_id="acct-beacon",
+            occurred_on=date(2026, 1, 21),
+            amount=5000.0,
+            direction="transfer",
+        )
+    for i in range(3):
+        _insert_transaction(
+            database,
+            transaction_id=f"tx-b-22-{i}",
+            account_id="acct-beacon",
+            occurred_on=date(2026, 1, 22),
+            amount=5000.0,
+            direction="transfer",
+        )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    # The 3/2 and 2/3 within-date subgroups can't pair cleanly via the
+    # cluster rule (mutual-set mismatch). They stay ambiguous.
+    assert result.pairs_created == 0
+    assert len(result.ambiguous) == 10
 
 
 def test_diagnostic_weak_classification_for_unknown_description(

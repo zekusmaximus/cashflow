@@ -16,10 +16,12 @@ from .parsers import (
     ALLY_PARSER_VERSION,
     BEACON_PARSER_VERSION,
     CHASE_PARSER_VERSION,
+    WEBSTER_PARSER_VERSION,
     ParseResult,
     parse_ally_csv,
     parse_beacon_csv,
     parse_chase_csv,
+    parse_webster_csv,
 )
 from .tools import (
     MATCH_THRESHOLD,
@@ -54,6 +56,11 @@ PARSERS: dict[str, ParserRegistration] = {
         name="ally-hysa",
         version=ALLY_PARSER_VERSION,
         parse=parse_ally_csv,
+    ),
+    "doc-004": ParserRegistration(
+        name="webster-checking",
+        version=WEBSTER_PARSER_VERSION,
+        parse=parse_webster_csv,
     ),
 }
 
