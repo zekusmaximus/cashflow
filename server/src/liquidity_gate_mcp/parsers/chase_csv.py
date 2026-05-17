@@ -53,6 +53,7 @@ def parse_chase_csv(file_path: Path) -> ChaseParseResult:
             )
             return result
 
+        duplicate_counts: dict[str, int] = {}
         for row_index, raw in enumerate(reader, start=2):  # header is line 1
             try:
                 parsed = _parse_row(
@@ -60,6 +61,7 @@ def parse_chase_csv(file_path: Path) -> ChaseParseResult:
                     normalized_fields,
                     document_name=document_name,
                     statement_period=statement_period,
+                    duplicate_counts=duplicate_counts,
                 )
             except _RowSkipped as skipped:
                 result.skipped.append(
@@ -81,6 +83,7 @@ def _parse_row(
     *,
     document_name: str,
     statement_period: str | None,
+    duplicate_counts: dict[str, int],
 ) -> ParsedTransaction:
     transaction_date_raw = _get(raw, fields, "transaction date")
     if not transaction_date_raw:
@@ -106,7 +109,10 @@ def _parse_row(
     memo = _get(raw, fields, "memo") if "memo" in fields else ""
 
     direction = _direction_for(amount, chase_type)
-    record_key = _source_record_key(occurred_on, amount, description)
+    base_payload = _base_payload(occurred_on, amount, description)
+    duplicate_index = duplicate_counts.get(base_payload, 0)
+    duplicate_counts[base_payload] = duplicate_index + 1
+    record_key = _source_record_key(base_payload, duplicate_index)
 
     metadata = {
         "chase_category": chase_category,
@@ -142,13 +148,20 @@ def _direction_for(amount: Decimal, chase_type: str) -> str:
     return "inflow"
 
 
-def _source_record_key(occurred_on: date, amount: Decimal, description: str) -> str:
-    # Stable across re-imports so the UNIQUE (source_document_name,
-    # source_record_key) constraint catches duplicates. Normalize the
-    # description to collapse incidental whitespace differences between
-    # Chase's CSV export and any later edits.
+def _base_payload(occurred_on: date, amount: Decimal, description: str) -> str:
     normalized_description = " ".join(description.split())
-    payload = f"{occurred_on.isoformat()}|{amount}|{normalized_description}"
+    return f"{occurred_on.isoformat()}|{amount}|{normalized_description}"
+
+
+def _source_record_key(base_payload: str, duplicate_index: int) -> str:
+    # Stable across re-imports so the UNIQUE (source_document_name,
+    # source_record_key) constraint catches duplicates. The first occurrence
+    # of any (date, amount, description) tuple keeps the legacy hash so
+    # already-ingested rows still match on re-import. The 2nd+ occurrences
+    # within a file get a |seqN suffix that disambiguates Chase's repeated
+    # same-day same-amount same-description rows (e.g. micro-charges from
+    # the same merchant).
+    payload = base_payload if duplicate_index == 0 else f"{base_payload}|seq{duplicate_index}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

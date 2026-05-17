@@ -20,6 +20,11 @@ CHASE_CSV_HEADER = "Transaction Date,Post Date,Description,Category,Type,Amount,
 POSTED_PURCHASE = '5/01/2026,5/02/2026,"TARGET STORE #123",Shopping,Sale,-42.10,\n'
 POSTED_PAYMENT = '5/03/2026,5/04/2026,"AUTOMATIC PAYMENT - THANK YOU",,Payment,850.00,\n'
 PENDING_PURCHASE = ',,"PENDING WHOLE FOODS",Groceries,Sale,-18.55,\n'
+# Three identical (date, amount, description) rows — the case that caused
+# Chase same-day dedup collapse before the |seqN suffix was added.
+DUPLICATE_MICRO_A = '5/05/2026,5/06/2026,"AMAZON DIGITAL",Shopping,Sale,-0.99,\n'
+DUPLICATE_MICRO_B = '5/05/2026,5/06/2026,"AMAZON DIGITAL",Shopping,Sale,-0.99,\n'
+DUPLICATE_MICRO_C = '5/05/2026,5/06/2026,"AMAZON DIGITAL",Shopping,Sale,-0.99,\n'
 
 
 def _write_chase_csv(directory: Path, filename: str, body: str) -> Path:
@@ -79,6 +84,52 @@ def test_source_record_key_is_stable_across_parses(tmp_path: Path) -> None:
     assert [t.source_record_key for t in first] == [t.source_record_key for t in second]
     # Distinct rows produce distinct keys.
     assert first[0].source_record_key != first[1].source_record_key
+
+
+def test_duplicate_same_day_rows_get_distinct_keys(tmp_path: Path) -> None:
+    csv_path = _write_chase_csv(
+        tmp_path,
+        "chase.csv",
+        DUPLICATE_MICRO_A + DUPLICATE_MICRO_B + DUPLICATE_MICRO_C,
+    )
+
+    transactions = parse_chase_csv(csv_path).transactions
+
+    assert len(transactions) == 3
+    keys = [t.source_record_key for t in transactions]
+    assert len(set(keys)) == 3  # all three are distinct after the seq suffix
+
+
+def test_first_occurrence_key_matches_legacy_singleton_key(tmp_path: Path) -> None:
+    # Backwards-compat invariant: the first occurrence of a (date, amount,
+    # description) tuple must hash identically to the legacy single-row
+    # case, so existing DBs don't see 924 inserts on re-import. A file with
+    # the row once and a file with it three times must agree on the first
+    # row's key.
+    a_dir = tmp_path / "a"
+    a_dir.mkdir()
+    b_dir = tmp_path / "b"
+    b_dir.mkdir()
+    singleton = _write_chase_csv(a_dir, "chase.csv", DUPLICATE_MICRO_A)
+    triplet = _write_chase_csv(b_dir, "chase.csv", DUPLICATE_MICRO_A + DUPLICATE_MICRO_B + DUPLICATE_MICRO_C)
+
+    [singleton_tx] = parse_chase_csv(singleton).transactions
+    triplet_txs = parse_chase_csv(triplet).transactions
+
+    assert triplet_txs[0].source_record_key == singleton_tx.source_record_key
+
+
+def test_duplicate_dedup_is_idempotent_across_reparses(tmp_path: Path) -> None:
+    csv_path = _write_chase_csv(
+        tmp_path,
+        "chase.csv",
+        DUPLICATE_MICRO_A + DUPLICATE_MICRO_B + DUPLICATE_MICRO_C,
+    )
+
+    first = parse_chase_csv(csv_path).transactions
+    second = parse_chase_csv(csv_path).transactions
+
+    assert [t.source_record_key for t in first] == [t.source_record_key for t in second]
 
 
 def test_statement_period_derived_from_filename(tmp_path: Path) -> None:

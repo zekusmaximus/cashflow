@@ -31,15 +31,20 @@ BeaconParseResult = ParseResult
 #   standing transfer.
 # - ionbank\s+online\s+xfr : internal IonBank-platform transfers between
 #   household accounts.
+# - webstr.*ashley\s*m\s*calabr : Webster check-transfer P2P inbounds from
+#   Ashley's separate checking. Master index §3 classifies Ashley -> joint
+#   as household funding, not income. Pairs with Webster's `CK TRANSFER …
+#   ASHLEY M CALABRESE` outbounds (see parsers/webster_csv.py).
 #
-# Other suspected transfer patterns (Webster P2P from Ashley, Fidelity
-# MoneyLine sweeps, Venmo cash-out) are intentionally not in this list yet —
-# they are flagged for human review rather than auto-classified.
+# Other suspected transfer patterns (Fidelity MoneyLine sweeps, Venmo
+# cash-out) are intentionally not in this list yet — they are flagged for
+# human review rather than auto-classified.
 TRANSFER_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"chase\s+credit", re.IGNORECASE),
     re.compile(r"ally\s+bank\s*\$?transfer", re.IGNORECASE),
     re.compile(r"ally\s+bank\s+p2p", re.IGNORECASE),
     re.compile(r"ionbank\s+online\s+xfr", re.IGNORECASE),
+    re.compile(r"webstr.*ashley\s*m\s*calabr", re.IGNORECASE),
 )
 
 
