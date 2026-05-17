@@ -1,11 +1,10 @@
 {
   "servers": {
     "liquidity-gate": {
-      "command": "python",
+      "command": "server/.venv/Scripts/python.exe",
       "args": ["-m", "liquidity_gate_mcp.server"],
       "cwd": "server",
       "env": {
-        "PYTHONPATH": "src",
         "LIQUIDITY_GATE_ROOT": ".."
       }
     }
