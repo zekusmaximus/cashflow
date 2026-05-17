@@ -221,3 +221,43 @@ class PairTransfersResult(BaseModel):
     ambiguous: list[AmbiguousTransfer] = Field(default_factory=list)
     suspected_untagged: list[SuspectedUntagged] = Field(default_factory=list)
     dry_run: bool = False
+
+
+class ReconcilePeriodsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    period_start: date
+    period_end: date
+    account_ids: list[str] = Field(default_factory=list)
+
+
+class ReconciliationPeriodSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str
+    account_label: str
+    account_type: str
+    period_start: str
+    period_end: str
+    statement_opening_balance: float | None
+    statement_closing_balance: float | None
+    closing_balance_source: str | None
+    computed_inflows: float
+    computed_outflows: float
+    computed_transfers_in: float
+    computed_transfers_out: float
+    computed_closing_balance: float | None
+    variance_amount: float | None
+    variance_explanation: str = ""
+
+
+class ReconcilePeriodsResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    balances_file_loaded: bool
+    balances_file_path: str | None
+    period_start: str
+    period_end: str
+    accounts_processed: int
+    periods_written: int
+    summaries: list[ReconciliationPeriodSummary] = Field(default_factory=list)

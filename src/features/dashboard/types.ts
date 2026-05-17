@@ -18,8 +18,23 @@ export interface LeakageCategory {
   cap: number;
 }
 
+export interface ReconciliationPeriod {
+  accountId: string;
+  accountLabel: string;
+  accountType: string;
+  periodStart: string;
+  periodEnd: string;
+  statementOpeningBalance: number | null;
+  statementClosingBalance: number | null;
+  closingBalanceSource: string | null;
+  computedClosingBalance: number | null;
+  varianceAmount: number | null;
+  varianceExplanation: string;
+}
+
 export interface DashboardSnapshot {
   months: CashFlowMonth[];
   gates: LiquidityGate[];
   leakageCategories: LeakageCategory[];
+  reconciliations: ReconciliationPeriod[];
 }

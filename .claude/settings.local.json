@@ -16,7 +16,14 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_transfer_pairing.py -v)",
       "Bash(.venv/Scripts/python.exe -c \"from liquidity_gate_mcp.config import load_settings; s = load_settings\\(\\); print\\('watch:', s.watch_root\\); print\\('db:', s.database_path\\); print\\('tracker:', s.tracker_csv_path\\)\")",
       "Bash(.venv/Scripts/python.exe _tmp_run_pair.py)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/test_transfer_pairing.py -q)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_transfer_pairing.py -q)",
+      "Bash(python -m pytest tests/test_balances_loader.py tests/test_reconciliation.py -x -q)",
+      "Bash(python -m pytest -q)",
+      "Bash(python -m pytest tests/test_balances_loader.py tests/test_reconciliation.py tests/test_reconcile_transactions.py tests/test_normalize_amount.py tests/test_read_only_sql_guard.py tests/test_transfer_pairing.py -q)",
+      "Bash(python -c \"import watchdog; print\\('installed'\\)\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Jeff\\Documents\\Cashflow"
     ]
   }
 }
