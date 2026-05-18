@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .classifier import apply_classifier as apply_classifier_impl
 from .config import ServerSettings
 from .database import DatabaseManager
 from .models import (
+    ApplyClassifierRequest,
     IngestFileSummary,
     IngestRunResult,
     IngestRunTotals,
@@ -94,10 +96,14 @@ def ingest_watch_root(
             summaries.append(_ingest_file(database, candidate, doc_id, registration))
 
     totals = _totals(summaries)
+    classifier_result = apply_classifier_impl(
+        database, ApplyClassifierRequest(dry_run=False, reclassify_all=False)
+    )
     return IngestRunResult(
         scanned_root=scan_root.as_posix(),
         totals=totals,
         files=summaries,
+        classifier=classifier_result,
     )
 
 

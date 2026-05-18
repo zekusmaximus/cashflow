@@ -165,6 +165,58 @@ CREATE TABLE IF NOT EXISTS reconciliation_periods (
   FOREIGN KEY (account_id) REFERENCES accounts(id)
 );
 
+CREATE TABLE IF NOT EXISTS classification_rules (
+  id TEXT PRIMARY KEY,
+  pattern TEXT NOT NULL,
+  account_filter TEXT,
+  direction_filter TEXT,
+  primary_category TEXT,
+  subcategory TEXT,
+  merchant_normalized TEXT,
+  household_role TEXT,
+  lifecycle TEXT,
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  priority INTEGER NOT NULL DEFAULT 100,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seed rules are inserted once; INSERT OR IGNORE skips rows whose id already exists.
+-- priority: lower number = checked first; 900 = fallback catchall.
+
+INSERT OR IGNORE INTO classification_rules
+  (id, pattern, account_filter, direction_filter, primary_category, subcategory,
+   merchant_normalized, household_role, lifecycle, confidence, priority, notes)
+VALUES
+  ('rule-transfer-catchall', '.+', NULL, 'transfer', 'transfer', NULL,
+   NULL, NULL, NULL, 'high', 900,
+   'Any transfer-direction row gets primary_category=transfer'),
+
+  ('rule-interest-paid', '(?i)interest paid', NULL, NULL, 'income', 'interest',
+   NULL, NULL, 'recurring', 'high', 10,
+   'Ally and savings interest postings'),
+
+  ('rule-payroll-novartis', '(?i)novartis.*payroll|payroll.*novartis', NULL, NULL,
+   'income', 'payroll', 'Novartis Payroll', 'ashley', 'recurring', 'high', 10,
+   'Ashley Novartis payroll deposits'),
+
+  ('rule-mobile-check-dep', '(?i)mobile check dep', NULL, 'inflow', 'income',
+   'check_deposit', 'Mobile Check Deposit', NULL, 'one_time', 'high', 10,
+   'Mobile check deposits are real inflows, not transfers'),
+
+  ('rule-fidelity-moneyline', '(?i)fid bkg svc llc moneyline', NULL, NULL,
+   'income', 'rsu_proceeds', 'Fidelity MoneyLine', NULL, 'one_time', 'high', 15,
+   'Fidelity MoneyLine sweeps — RSU/stock-plan proceeds on Webster and Beacon'),
+
+  ('rule-amazon', '(?i)\bamazon\b|\bamzn\b', NULL, NULL,
+   'variable_lifestyle', 'amazon', 'Amazon', NULL, 'recurring', 'high', 20,
+   'Amazon purchases and subscriptions'),
+
+  ('rule-whole-foods', '(?i)whole foods|wholefds', NULL, NULL,
+   'variable_lifestyle', 'groceries', 'Whole Foods', NULL, 'recurring', 'high', 20,
+   'Whole Foods grocery purchases');
+
 CREATE VIEW IF NOT EXISTS monthly_cashflow_summary AS
 SELECT
   substr(occurred_on, 1, 7) AS month,

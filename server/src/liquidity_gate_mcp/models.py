@@ -233,6 +233,7 @@ class IngestRunResult(BaseModel):
     scanned_root: str
     totals: IngestRunTotals
     files: list[IngestFileSummary]
+    classifier: ApplyClassifierResult | None = None
 
 
 class PairTransfersRequest(BaseModel):
@@ -324,3 +325,92 @@ class ReconcilePeriodsResult(BaseModel):
     accounts_processed: int
     periods_written: int
     summaries: list[ReconciliationPeriodSummary] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Classification rules
+# ---------------------------------------------------------------------------
+
+
+class ClassificationRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    pattern: str
+    account_filter: str | None
+    direction_filter: str | None
+    primary_category: str | None
+    subcategory: str | None
+    merchant_normalized: str | None
+    household_role: str | None
+    lifecycle: str | None
+    confidence: str
+    priority: int
+    notes: str
+    created_at: str
+    updated_at: str
+
+
+class UpsertClassificationRuleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    pattern: str
+    account_filter: str | None = None
+    direction_filter: str | None = None
+    primary_category: str | None = None
+    subcategory: str | None = None
+    merchant_normalized: str | None = None
+    household_role: str | None = None
+    lifecycle: str | None = None
+    confidence: str = "medium"
+    priority: int = 100
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def require_at_least_one_output(self) -> "UpsertClassificationRuleRequest":
+        if not any([
+            self.primary_category,
+            self.subcategory,
+            self.merchant_normalized,
+            self.household_role,
+            self.lifecycle,
+        ]):
+            raise ValueError(
+                "At least one classification output field is required "
+                "(primary_category, subcategory, merchant_normalized, household_role, or lifecycle)."
+            )
+        return self
+
+
+class UpsertClassificationRuleResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    created: bool
+    rule: ClassificationRule
+
+
+class ApplyClassifierRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_filter: str | None = None
+    dry_run: bool = False
+    reclassify_all: bool = False
+
+
+class ApplyClassifierResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transactions_scanned: int
+    transactions_matched: int
+    transactions_unclassified: int
+    dry_run: bool
+    rules_applied: int
+
+
+class ListClassificationRulesResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rules: list[ClassificationRule]
+    total: int
