@@ -1,7 +1,7 @@
 # Project Status
 
 Living tracker of what's built, what's next, and what's outstanding for the
-Liquidity Gate household cash-flow workspace. Update this file as work
+Liquidity Gate household spending reconstruction workspace. Update this file as work
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
@@ -9,15 +9,22 @@ remains the canonical project plan; this file is the operational heartbeat.
 
 ## Snapshot
 
-End-to-end pipeline works for four account types: drop a Chase, Beacon,
-Ally HYSA, or Webster (Ashley) CSV in the watch root, the Tauri app
-auto-matches and shows ingestion counts, the dashboard reflects real
-numbers, and Claude Desktop can call the MCP server's tools to refresh
-and analyze. Real-DB run on 2026-05-17 produced 31 cross-account pairs
+End-to-end spending-first pipeline works for four account types: drop a
+Chase, Beacon, Ally HYSA, or Webster (Ashley) CSV in the watch root, the
+Tauri app auto-matches core sources and later context, the dashboard
+reflects real numbers, and Claude Desktop can call the MCP server's tools
+to ingest, pair transfers, and analyze monthly and annual spending. Real-DB
+run on 2026-05-17 produced 31 cross-account pairs
 (including the 5×5 Webster → Beacon cluster on 2026-01-21, which the
 connected-components fallback retires deterministically) and 12 fresh
 Chase rows from the same-day dedup recovery. ~1,144 transactions now
 in the local SQLite (936 Chase + 137 Beacon + 19 Ally + 52 Webster).
+
+Scope revision phases 0-3 are complete: docs, Cowork prompts, tracker
+priorities, and the intake UI now treat core transaction feeds as the
+baseline for useful analysis. Payroll, tax, insurance, debt, rental, and
+other planning inputs remain available as optional later layers rather than
+baseline blockers.
 
 **Residual diagnostic surface** (25 unpaired + 4 ambiguous) splits into
 three categories that each need a different fix, captured in detail in
@@ -36,9 +43,12 @@ auto-memory `unpaired-transfer-diagnostics`:
 **Next single task**: rule-based classifier (#2) — regex-driven
 classification over `description_raw` writing `primary_category`,
 `subcategory`, `household_role`, `recurrence`, `treatment` to
-transactions. Target ~60% auto-classification with a triage queue for
-the rest. Unblocks the Transaction Register and Variable Lifestyle
-Spend tabs.
+transactions. A durable transaction-override backend now exists for
+exact-match manual fixes (checks, Venmo labels, payee mapping) and will
+survive YTD-to-monthly re-imports; the classifier remains the next step
+for broader recurring automation. Target ~60% auto-classification with a
+triage queue for the rest. Unblocks the Transaction Register and
+Variable Lifestyle Spend tabs.
 
 ## Architecture (one-screen reminder)
 
@@ -48,7 +58,7 @@ equivalent. Override via `LIQUIDITY_GATE_DB_PATH`.
 
 ```
 Tauri desktop app  (npm run tauri dev)
-  └─ React UI: Document Intake + Cash Flow Dashboard
+  └─ React UI: Source Intake + Cash Flow Dashboard
   └─ @tauri-apps/plugin-sql reads/writes the shared DB
 
 Python MCP server  (launched by Claude Desktop subprocess)
@@ -78,6 +88,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Filename scoring: token overlap + bigram-ratio + extension bonus, threshold 0.35
 - [x] CamelCase + letter/digit splits in tokenizer (`401k` matches `401(k)`)
 - [x] File-first winner-takes-all assignment (no duplicate row claims)
+- [x] Manual tracker `Obtained ✓` flags and filesystem matches now agree across desktop UI and MCP metadata
 - [x] Python and TypeScript implementations, kept in sync
   - [server/src/liquidity_gate_mcp/tools.py](../server/src/liquidity_gate_mcp/tools.py)
   - [src/features/document-intake/matcher.ts](../src/features/document-intake/matcher.ts)
@@ -115,14 +126,20 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] All Beacon `ALLY BANK $TRANSFER` and `ALLY BANK P2P` rows pair with their Ally counterparts
 
 ### MCP integration
-- [x] 6 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`
+- [x] 7 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`
 - [x] 3 resources: `docs://master-index`, `docs://tracker`, `watch://recent-events`
-- [x] 1 prompt: `financial_detective`
+- [x] 1 spending-first prompt: `financial_detective`
 - [x] Wired to Claude Desktop via [`%APPDATA%\Claude\claude_desktop_config.json`](https://docs.anthropic.com)
 - [x] Verified end-to-end ingestion call from a Claude Desktop chat
 
+### Durable overrides
+
+- [x] `transaction_overrides` table keyed by a source-independent match key (account + date + amount + normalized description)
+- [x] `upsert_transaction_override` MCP tool stores payee/category/role/lifecycle/note overrides and reapplies them to future re-imports
+- [x] Existing matching transactions are updated immediately; future monthly imports inherit the same override even when `source_document_name` changes
+
 ### Frontend
-- [x] Document Intake view: 86-row checklist, auto-match badges, ingested counts
+- [x] Source Intake view: tracker-driven core-source coverage, later-context badges, ingested counts
 - [x] Watch-root status banner showing root path and indexed file count
 - [x] Cash Flow Dashboard: real Inflow/Outflow bars from `monthly_cashflow_summary` view
 - [x] React Query: 5s staleTime + refetchOnWindowFocus for snappy local refresh
@@ -143,7 +160,10 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 
 ## Roadmap
 
-Roughly ordered by value-per-effort. Items higher up unblock items below.
+Roughly ordered by value-per-effort for the spending-first scope. Item 1
+improves the baseline household spending tool directly. Items below it are
+later layers or optional planning-oriented extensions and should not block
+normal use of the repo for transaction-based spending analysis.
 
 ### 1. Rule-based classifier
 - [ ] `classification_rules` table: regex over `description_raw` → (primary_category, subcategory, treatment, household_role, recurrence, confidence)
@@ -152,29 +172,29 @@ Roughly ordered by value-per-effort. Items higher up unblock items below.
 - [ ] Master index §7
 - [ ] Aim: ~60% auto-classification, rest in triage queue
 
-### 2. Paystub PDF extraction
+### 2. Optional later: Paystub PDF extraction
 - [ ] Decide: LLM-based (privacy tradeoff) vs local OCR + per-employer templates
 - [ ] One extractor handles all employers with a JSON schema (gross, 401k, HSA, federal/state/FICA, RSU withholding, net)
 - [ ] Per-paystub data lands in transactions or a new payroll_events table
 - [ ] Required for capital-plan feasibility tests in master index §10
 
-### 3. Normalization layer
+### 3. Later enrichment: Normalization layer
 - [ ] `sinking_funds` table (annual premiums → monthly reserve)
 - [ ] Event-income tagging on transactions (bonus, RSU, refund)
 - [ ] Normalized monthly view alongside `monthly_cashflow_summary`
 - [ ] Master index §8
 
-### 4. Forward projection engine
+### 4. Optional later: Forward projection engine
 - [ ] Project through 12/31/2027
 - [ ] Inputs: net pay, fixed obligations, premiums, rental, expected RSU events
 - [ ] Output: HYSA balance trajectory, projected $80K gate date, capital-plan feasibility status
 - [ ] Master index §10
 
-### 5. Appendix export
+### 5. Optional later: Appendix export
 - [ ] Generate `2026_Household_Cashflow_Reality_Appendix.md` from analyzed data
 - [ ] Sections per master index §11
 - [ ] Expose as MCP tool so Claude can produce on demand
-- [ ] **This is the actual project deliverable**
+- [ ] Optional handoff deliverable when broader planning support is explicitly requested
 
 ### 6. Dashboard build-out
 - [ ] 14 sections per master index §6 (currently 4 cards: cash flow, HYSA gate, leakage, reconciliation)

@@ -13,12 +13,14 @@ from .models import (
     ReconcilePeriodsRequest,
     ReconcileTransactionsRequest,
     SqlQueryRequest,
+    UpsertTransactionOverrideRequest,
 )
 from .reconciliation import reconcile_periods as reconcile_periods_impl
 from .tools import (
     query_cashflow_data as query_cashflow_data_impl,
     read_document_metadata as read_document_metadata_impl,
     reconcile_transactions as reconcile_transactions_impl,
+    upsert_transaction_override as upsert_transaction_override_impl,
 )
 from .transfers import pair_transfers as pair_transfers_impl
 from .watcher import CashFlowWatcher
@@ -76,6 +78,12 @@ def reconcile_transactions(request: dict) -> dict:
 def query_cashflow_data(request: dict) -> dict:
     parsed_request = SqlQueryRequest.model_validate(request)
     return query_cashflow_data_impl(database, parsed_request).model_dump()
+
+
+@mcp.tool()
+def upsert_transaction_override(request: dict) -> dict:
+    parsed_request = UpsertTransactionOverrideRequest.model_validate(request)
+    return upsert_transaction_override_impl(database, parsed_request).model_dump()
 
 
 @mcp.tool()

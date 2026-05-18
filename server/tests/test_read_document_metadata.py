@@ -42,3 +42,37 @@ def test_read_document_metadata_assigns_each_file_to_single_best_tracker_row(
     assert items_by_id["doc-001"].matched_files[0].relative_path == "2026-05-12_Chase_Credit_Card.csv"
     assert items_by_id["doc-005"].status == "missing"
     assert items_by_id["doc-005"].matched_files == []
+
+
+def test_read_document_metadata_honors_manual_tracker_obtained_flags(
+    tmp_path: Path, database: DatabaseManager, schema_path: Path
+) -> None:
+    tracker_csv = tmp_path / "tracker.csv"
+    tracker_csv.write_text(
+        "Category,Document,Subject Matter,Format,Priority,Source / Where to Get,Why Needed,Obtained ✓,Date Added,Notes\n"
+        "A. Core Transactions,Manual source,Spending,CSV,Essential core,Bank portal,Manual override,yes,,\n",
+        encoding="utf-8",
+    )
+
+    watch_root = tmp_path / "watch"
+    watch_root.mkdir()
+
+    settings = ServerSettings(
+        project_root=PROJECT_ROOT,
+        docs_dir=PROJECT_ROOT / "docs",
+        tracker_csv_path=tracker_csv,
+        master_index_path=PROJECT_ROOT / "docs" / "00_CASH_FLOW_MASTER_INDEX.md",
+        database_path=database.database_path,
+        schema_path=schema_path,
+        watch_root=watch_root,
+    )
+
+    result = read_document_metadata(settings, database, _Watcher())
+
+    [item] = result.items
+
+    assert result.summary.obtained_count == 1
+    assert result.summary.missing_count == 0
+    assert item.id == "doc-001"
+    assert item.status == "obtained"
+    assert item.matched_files == []

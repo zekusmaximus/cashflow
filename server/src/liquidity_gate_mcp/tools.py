@@ -18,6 +18,8 @@ from .models import (
     ReconcileTransactionsResult,
     SqlQueryRequest,
     SqlQueryResult,
+    UpsertTransactionOverrideRequest,
+    UpsertTransactionOverrideResult,
 )
 from .watcher import CashFlowWatcher
 
@@ -76,7 +78,7 @@ def read_document_metadata(
                 category=tracker_row.category,
                 document=tracker_row.document,
                 priority=tracker_row.priority,
-                status="obtained" if matches else "missing",
+                status="obtained" if tracker_row.obtained or matches else "missing",
                 matched_files=matches,
             )
         )
@@ -108,6 +110,12 @@ def reconcile_transactions(
 
 def query_cashflow_data(database: DatabaseManager, request: SqlQueryRequest) -> SqlQueryResult:
     return database.query(request.sql, request.params)
+
+
+def upsert_transaction_override(
+    database: DatabaseManager, request: UpsertTransactionOverrideRequest
+) -> UpsertTransactionOverrideResult:
+    return database.upsert_transaction_override(request)
 
 
 def load_tracker_rows(csv_path: Path) -> list[DocumentTrackerRow]:
