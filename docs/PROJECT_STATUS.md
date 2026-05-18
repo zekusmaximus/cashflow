@@ -5,7 +5,7 @@ Liquidity Gate household cash-flow workspace. Update this file as work
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-17
+**Last updated:** 2026-05-18
 
 ## Snapshot
 
@@ -33,9 +33,12 @@ auto-memory `unpaired-transfer-diagnostics`:
    delays. Algorithm can't deterministically choose without
    description-aware pairing or manual triage.
 
-**Next single task**: reconciliation tab (#1) — opening/closing balance
-schema, per-account variance UI in the dashboard. Highest value because
-it surfaces bad data before downstream tabs propagate it.
+**Next single task**: rule-based classifier (#2) — regex-driven
+classification over `description_raw` writing `primary_category`,
+`subcategory`, `household_role`, `recurrence`, `treatment` to
+transactions. Target ~60% auto-classification with a triage queue for
+the rest. Unblocks the Transaction Register and Variable Lifestyle
+Spend tabs.
 
 ## Architecture (one-screen reminder)
 
@@ -112,7 +115,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] All Beacon `ALLY BANK $TRANSFER` and `ALLY BANK P2P` rows pair with their Ally counterparts
 
 ### MCP integration
-- [x] 5 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `query_cashflow_data`
+- [x] 6 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`
 - [x] 3 resources: `docs://master-index`, `docs://tracker`, `watch://recent-events`
 - [x] 1 prompt: `financial_detective`
 - [x] Wired to Claude Desktop via [`%APPDATA%\Claude\claude_desktop_config.json`](https://docs.anthropic.com)
@@ -124,6 +127,15 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Cash Flow Dashboard: real Inflow/Outflow bars from `monthly_cashflow_summary` view
 - [x] React Query: 5s staleTime + refetchOnWindowFocus for snappy local refresh
 
+### Reconciliation
+- [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
+- [x] `balances.toml` sidecar in watch root for Chase/Ally openings + per-period overrides; aliases (chase/beacon/ally/webster) resolve when there's one account per institution
+- [x] Compute module ([reconciliation.py](../server/src/liquidity_gate_mcp/reconciliation.py)) — opening + signed net = computed closing; credit-card sign inversion for amount-owed view; statement closing falls back to `metadata_json.running_balance` for Beacon/Webster
+- [x] Variance chains via statement closing (not computed), so a $5 gap in January doesn't cascade into February
+- [x] `variance_explanation` preserved across reruns (human note survives recomputation)
+- [x] `reconcile_periods` MCP tool wired into the server
+- [x] Dashboard variance card per account with Green (<$1) / Yellow ($1–$10) / Red (>$10) / "No statement" badge
+
 ### Documentation
 - [x] README with first-time setup, naming conventions, Cowork wiring
 - [x] Database location documented in Local-First Rules
@@ -133,52 +145,45 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 
 Roughly ordered by value-per-effort. Items higher up unblock items below.
 
-### 1. Reconciliation tab
-
-- [ ] New schema element for opening/closing per account per period
-- [ ] Beacon's running_balance in metadata_json gives free per-row balance check
-- [ ] UI surface in dashboard: per account, computed end vs statement end
-- [ ] Variance must be zero (or explicitly explained) before downstream tabs are trusted
-- [ ] Master index §6 #2
-
-### 2. Rule-based classifier
+### 1. Rule-based classifier
 - [ ] `classification_rules` table: regex over `description_raw` → (primary_category, subcategory, treatment, household_role, recurrence, confidence)
 - [ ] Classifier module that scans transactions and writes classifications
 - [ ] Manual override UI for unclassified rows
 - [ ] Master index §7
 - [ ] Aim: ~60% auto-classification, rest in triage queue
 
-### 3. Paystub PDF extraction
+### 2. Paystub PDF extraction
 - [ ] Decide: LLM-based (privacy tradeoff) vs local OCR + per-employer templates
 - [ ] One extractor handles all employers with a JSON schema (gross, 401k, HSA, federal/state/FICA, RSU withholding, net)
 - [ ] Per-paystub data lands in transactions or a new payroll_events table
 - [ ] Required for capital-plan feasibility tests in master index §10
 
-### 4. Normalization layer
+### 3. Normalization layer
 - [ ] `sinking_funds` table (annual premiums → monthly reserve)
 - [ ] Event-income tagging on transactions (bonus, RSU, refund)
 - [ ] Normalized monthly view alongside `monthly_cashflow_summary`
 - [ ] Master index §8
 
-### 5. Forward projection engine
+### 4. Forward projection engine
 - [ ] Project through 12/31/2027
 - [ ] Inputs: net pay, fixed obligations, premiums, rental, expected RSU events
 - [ ] Output: HYSA balance trajectory, projected $80K gate date, capital-plan feasibility status
 - [ ] Master index §10
 
-### 6. Appendix export
+### 5. Appendix export
 - [ ] Generate `2026_Household_Cashflow_Reality_Appendix.md` from analyzed data
 - [ ] Sections per master index §11
 - [ ] Expose as MCP tool so Claude can produce on demand
 - [ ] **This is the actual project deliverable**
 
-### 7. Dashboard build-out
-- [ ] 14 sections per master index §6 (currently only 3 cards)
-- [ ] Reconciliation status banner
+### 6. Dashboard build-out
+- [ ] 14 sections per master index §6 (currently 4 cards: cash flow, HYSA gate, leakage, reconciliation)
 - [ ] Transaction Register with classification edit
 - [ ] HYSA trajectory chart
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
 - [ ] Subscription audit / leakage card driven from real data
+- [ ] Reconciliation history drill-down (currently only the latest period per account)
+- [ ] Manual `variance_explanation` entry UI (currently DB-only)
 
 ## Known issues and loose ends
 
