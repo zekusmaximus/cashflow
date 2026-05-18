@@ -46,9 +46,9 @@ Project architecture remains local-file based. Repo docs, prompts, and code live
 
 Use this prompt:
 
-> Continuing the 2026 Household Spending Reconstruction workspace. Read `docs://master-index` first, then `docs://tracker`. Start with the available transaction exports and reconstruct monthly and annual spending. Ask for additional source accounts only when transaction coverage is incomplete. Treat payroll, tax, insurance, and broader planning documents as optional unless the task explicitly depends on them.
+> Continuing the 2026 Household Spending Reconstruction workspace. Read `docs://master-index` first, then `docs://project-status` for current roadmap state, then `docs://tracker`. Start with the available transaction exports and reconstruct monthly and annual spending. Ask for additional source accounts only when transaction coverage is incomplete. Treat payroll, tax, insurance, and broader planning documents as optional unless the task explicitly depends on them.
 
-If the active Cowork project is anchored to the watch root rather than the repo, mirror the current Financial Detective instructions into that project's custom instructions. Repo-local `.claudecowork/` files do not auto-apply there.
+If the active Cowork project is anchored to the watch root, the `.claudecowork/` directory is available there via a junction to the repo — no manual mirroring needed.
 
 If the chat is about a specific task, add one of these:
 
@@ -58,7 +58,6 @@ If the chat is about a specific task, add one of these:
 - “Focus only on transfer cleanup and double-counting control.”
 - “Focus only on recurring charges and one-time items.”
 - “Use optional planning documents only for a specific follow-up question.”
-
 ---
 
 ## 1. Project Objective

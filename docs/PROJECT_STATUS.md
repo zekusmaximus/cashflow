@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-18
+**Last updated:** 2026-05-18 (night)
 
 ## Snapshot
 
@@ -33,6 +33,24 @@ Durable transaction overrides are now live and validated: Cowork can store
 payee/category/role/lifecycle fixes that survive a future YTD-to-monthly
 re-import for the same logical transaction.
 
+Rule-based classifier is now live: 17 rules covering 609 of 1,144
+transactions (53%). First-pass Cowork session on 2026-05-18 added 10
+merchant rules (Toast POS, Amazon 365/Fresh, Big Y, Instacart, Reddit Ads,
+Prime Video, CVS, Apple subscriptions, pet care, Trader Joe's), dropping
+unclassified from 874 to 535. Three MCP tools available for ongoing
+rule management: `list_classification_rules`, `upsert_classification_rule`,
+`apply_classifier`. Classification runs automatically on every
+`ingest_documents` call. 535 rows remain in the triage queue — next
+round should cover Zara, Sephora, French Cleaners, Google One,
+Servomation, and the Westin gift shop.
+
+Cowork integration optimized 2026-05-18: `docs://project-status` MCP resource
+added (4 resources total), classifier and override tools wired into the
+`agent.md` default workflow, `config.json` startup sequence updated to MCP
+resource URIs, `mcp-server.json` now points to the venv Python directly, and
+the watch-root `.claudecowork` directory is a junction to the repo — all 7
+identified Cowork deficiencies resolved.
+
 **Residual diagnostic surface** (25 unpaired + 4 ambiguous) splits into
 three categories that each need a different fix, captured in detail in
 auto-memory `unpaired-transfer-diagnostics`:
@@ -47,15 +65,13 @@ auto-memory `unpaired-transfer-diagnostics`:
    delays. Algorithm can't deterministically choose without
    description-aware pairing or manual triage.
 
-**Next single task**: rule-based classifier (#2) — regex-driven
-classification over `description_raw` writing `primary_category`,
-`subcategory`, `household_role`, `recurrence`, `treatment` to
-transactions. A durable transaction-override backend now exists for
-exact-match manual fixes (checks, Venmo labels, payee mapping) and will
-survive YTD-to-monthly re-imports; the classifier remains the next step
-for broader recurring automation. Target ~60% auto-classification with a
-triage queue for the rest. Unblocks the Transaction Register and
-Variable Lifestyle Spend tabs.
+**Next single task**: second classifier pass — add rules for the 535
+remaining unclassified rows (Zara, Sephora, French Cleaners, Google One,
+Servomation/vending, Westin gift shop, and others). Use
+`query_cashflow_data` to pull the next top-20 unclassified descriptions,
+then `upsert_classification_rule` + `apply_classifier`. After coverage
+reaches ~75%, begin Dashboard build-out: Transaction Register tab with
+classification edit UI (roadmap §6).
 
 ## Architecture (one-screen reminder)
 
@@ -142,7 +158,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 
 ### MCP integration
 - [x] 7 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`
-- [x] 3 resources: `docs://master-index`, `docs://tracker`, `watch://recent-events`
+- [x] 4 resources: `docs://master-index`, `docs://tracker`, `docs://project-status`, `watch://recent-events`
 - [x] 1 spending-first prompt: `financial_detective`
 - [x] Wired to Claude Desktop via [`%APPDATA%\Claude\claude_desktop_config.json`](https://docs.anthropic.com)
 - [x] Verified end-to-end ingestion call from a Claude Desktop chat
@@ -174,6 +190,16 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] [`.claudecowork/`](.claudecowork/) descriptors for Cowork integration
 - [x] Watch-root defaults and docs consistently refer to `C:\Users\Jeff\Documents\Cashflow`
 - [x] Repo-vs-watch-root split documented for Cowork analyst vs builder work
+- [x] Cowork integration optimized 2026-05-18: `docs://project-status` MCP resource, classifier/override tools in `agent.md` workflow, MCP URIs in `config.json` startup, venv Python in `mcp-server.json`, watch-root `.claudecowork` junction pointing to repo
+
+### Classifier
+- [x] `classification_rules` table with priority, account_filter, direction_filter, confidence
+- [x] `classifier.py` — apply_classifier, upsert_classification_rule, list_classification_rules
+- [x] 7 seed rules in schema (idempotent INSERT OR IGNORE)
+- [x] Auto-classification on every ingest_documents call
+- [x] 3 MCP tools registered in server.py
+- [x] 18 tests in test_classifier.py (124/124 suite passing)
+- [x] First Cowork rule-building session: 10 merchant rules, 609/1,144 classified (53%)
 
 ## Roadmap
 
@@ -182,12 +208,18 @@ improves the baseline household spending tool directly. Items below it are
 later layers or optional planning-oriented extensions and should not block
 normal use of the repo for transaction-based spending analysis.
 
-### 1. Rule-based classifier
-- [ ] `classification_rules` table: regex over `description_raw` → (primary_category, subcategory, treatment, household_role, recurrence, confidence)
-- [ ] Classifier module that scans transactions and writes classifications
-- [ ] Manual override UI for unclassified rows
-- [ ] Master index §7
-- [ ] Aim: ~60% auto-classification, rest in triage queue
+### 1. Rule-based classifier ✓
+- [x] `classification_rules` table: regex → (primary_category, subcategory, merchant_normalized, household_role, lifecycle, confidence)
+- [x] Classifier module (`classifier.py`) — first-match wins, protects manual overrides, writes provenance to metadata_json
+- [x] Auto-runs on every `ingest_documents` call
+- [x] Three MCP tools: `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`
+- [x] 7 seed rules shipped with schema; 10 merchant rules added via Cowork on 2026-05-18
+- [x] 609/1,144 transactions classified (53%); 535 remain — ongoing via Cowork rule-building sessions
+- [ ] Manual override UI for unclassified rows (Dashboard build-out item)
+
+### 1b. Second classifier pass (next)
+- [ ] Pull top-20 unclassified descriptions, add rules for Zara, Sephora, French Cleaners, Google One, Servomation, Westin, and remaining long tail
+- [ ] Target: ~75% coverage before starting Transaction Register tab
 
 ### 2. Optional later: Paystub PDF extraction
 - [ ] Decide: LLM-based (privacy tradeoff) vs local OCR + per-employer templates
@@ -229,7 +261,7 @@ normal use of the repo for transaction-based spending analysis.
   - `FID BKG SVC LLC MONEYLINE` (Fidelity sweeps, often $15)
   - `VENMO PAYMENT`
   - `MOBILE CHECK DEP`
-- [ ] **Watch-root Cowork projects do not inherit repo-local instructions automatically.** If the active Cowork project is anchored to `C:\Users\Jeff\Documents\Cashflow` instead of the repo, mirror the current contents of [.claudecowork/agent.md](../.claudecowork/agent.md) into that project's custom instructions so the spending-first persona stays aligned with the MCP resources and tool flow.
+- [x] **Watch-root Cowork project isolation resolved.** `C:\Users\Jeff\Documents\Cashflow\.claudecowork` is now a junction to the repo `.claudecowork\` directory — `agent.md`, `config.json`, and `mcp-server.json` are shared automatically. No manual mirroring needed.
 - [ ] **Three Ally HYSA inbound transfers have no Beacon counterpart.** Verified via DB query 2026-05-13: $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). The 1/5 row is **Jeff's bonus check deposit** (confirmed 2026-05-17) — classify as event income, not a transfer. The 4/8 and 5/8 rows are still unconfirmed origin; the 4/8 $5,080 is close to but not equal to Webster's 4/6 $5,000 `CK TRANSFER` outbound, so amount-based pairing won't catch it. Likely need explicit document confirmation rather than pattern-matching.
 
 ## How to update this file
