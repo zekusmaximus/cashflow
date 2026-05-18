@@ -62,6 +62,24 @@ CREATE TABLE IF NOT EXISTS transactions (
   FOREIGN KEY (import_batch_id) REFERENCES import_batches(id)
 );
 
+CREATE TABLE IF NOT EXISTS transaction_overrides (
+  id TEXT PRIMARY KEY,
+  match_key TEXT NOT NULL UNIQUE,
+  account_id TEXT NOT NULL,
+  occurred_on TEXT NOT NULL,
+  amount REAL NOT NULL,
+  description_raw TEXT NOT NULL,
+  merchant_normalized TEXT,
+  primary_category TEXT,
+  subcategory TEXT,
+  household_role TEXT,
+  lifecycle TEXT,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
 CREATE TABLE IF NOT EXISTS rsu_grants (
   id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,

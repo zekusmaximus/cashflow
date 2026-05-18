@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DocumentTrackerRow(BaseModel):
@@ -137,6 +137,69 @@ class SqlQueryResult(BaseModel):
 
     row_count: int
     rows: list[dict[str, Any]]
+
+
+class UpsertTransactionOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    merchant_normalized: str | None = None
+    primary_category: str | None = None
+    subcategory: str | None = None
+    household_role: str | None = None
+    lifecycle: str | None = None
+    note: str = ""
+
+    @field_validator(
+        "merchant_normalized",
+        "primary_category",
+        "subcategory",
+        "household_role",
+        "lifecycle",
+        mode="before",
+    )
+    @classmethod
+    def strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def strip_note(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @model_validator(mode="after")
+    def ensure_override_value_present(self) -> "UpsertTransactionOverrideRequest":
+        if not any(
+            value is not None
+            for value in (
+                self.merchant_normalized,
+                self.primary_category,
+                self.subcategory,
+                self.household_role,
+                self.lifecycle,
+            )
+        ) and not self.note:
+            raise ValueError("At least one override field or note is required.")
+        return self
+
+
+class UpsertTransactionOverrideResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    match_key: str
+    updated_transactions: int
+    merchant_normalized: str | None = None
+    primary_category: str | None = None
+    subcategory: str | None = None
+    household_role: str | None = None
+    lifecycle: str | None = None
+    note: str = ""
 
 
 class IngestFileSummary(BaseModel):
