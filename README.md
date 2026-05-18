@@ -1,6 +1,8 @@
 # Liquidity Gate
 
-Liquidity Gate is a local-first desktop workspace for reconstructing household cash flow from raw financial documents, modeling liquidity constraints, and exposing a Python MCP server that LLM agents can use without sending data to the cloud.
+Liquidity Gate is a local-first desktop workspace for reconstructing household spending from core transaction exports, storing that data in SQLite, and exposing a Python MCP server that LLM agents can use for useful monthly and annual cash-flow discussions without sending data to the cloud.
+
+Advanced planning inputs such as payroll, tax, insurance, debt, and capital-plan documents can be layered in later, but they are not the baseline requirement for using this repo.
 
 ## Stack
 
@@ -12,7 +14,7 @@ Liquidity Gate is a local-first desktop workspace for reconstructing household c
 
 ## Repository layout
 
-- [docs/](docs/) — canonical planning references: the master index, the tracker CSV that drives the intake view, and [PROJECT_STATUS.md](docs/PROJECT_STATUS.md) (living roadmap of what's built and what's next).
+- [docs/](docs/) — canonical operating references: the master index, the tracker CSV that drives the intake view, and [PROJECT_STATUS.md](docs/PROJECT_STATUS.md) (living roadmap of what's built and what's next).
 - [src/](src/) — React UI: Document Intake and Cash Flow Dashboard.
 - [src-tauri/](src-tauri/) — Tauri v2 shell, Rust commands, plugin permissions.
 - [server/](server/) — Python MCP server, schema, and supporting models.
@@ -22,7 +24,7 @@ Liquidity Gate is a local-first desktop workspace for reconstructing household c
 ## Local-first rules
 
 - No cloud sync is implemented. Everything runs against local SQLite and the local filesystem.
-- The tracker CSV in [docs/](docs/) is the single source of truth for which documents are needed.
+- The tracker CSV in [docs/](docs/) is the single source of truth for tracked sources and optional enrichments, but the baseline required inputs are the core transaction exports that reconstruct household spending.
 - The canonical schema lives in [server/sql/schema.sql](server/sql/schema.sql) and is shared by the MCP server and the desktop app.
 - **Real financial documents are never tracked in this repository.** They live under a watch root outside the repo (configured via `LIQUIDITY_GATE_WATCH_ROOT`).
 - **The SQLite database lives in the OS app-config directory** to match what Tauri's `plugin-sql` resolves `sqlite:liquidity-gate.db` against — the desktop app and the MCP server share one file. Defaults: `%APPDATA%\com.jeff.liquiditygate\liquidity-gate.db` on Windows, `~/Library/Application Support/com.jeff.liquiditygate/liquidity-gate.db` on macOS, `~/.config/com.jeff.liquiditygate/liquidity-gate.db` on Linux. Override with `LIQUIDITY_GATE_DB_PATH`.
@@ -107,7 +109,7 @@ npm run tauri dev
 
 This compiles the Rust shell (~30 seconds on first run), starts the Vite dev server on port 1420, and opens the Tauri window. You should see:
 
-- The **Document Intake** view, listing all 86 tracker rows.
+- The **Document Intake** view, listing tracked financial sources and optional enrichments.
 - A status banner showing which folder is being watched and how many files are indexed.
 - Any file you drop in the watch root appears under its best-matching tracker row within 5 seconds, badged "Auto-matched."
 
@@ -143,7 +145,7 @@ The MCP server is **launched by an MCP client**, not run by hand. Claude Cowork 
 
 Cowork reads two files from this repo:
 
-- [.claudecowork/config.json](.claudecowork/config.json) — agent name, persona path, MCP descriptor path, and the startup sequence (read the master index first, then the tracker, then call `read_document_metadata`).
+- [.claudecowork/config.json](.claudecowork/config.json) — agent name, persona path, MCP descriptor path, and the startup sequence (read the master index first, then the tracker, then inspect core transaction sources before asking for more inputs).
 - [.claudecowork/mcp-server.json](.claudecowork/mcp-server.json) — how to launch the server: `python -m liquidity_gate_mcp.server` from the `server/` directory, with `PYTHONPATH=src` and `LIQUIDITY_GATE_ROOT=..`.
 
 To use it:
@@ -168,6 +170,14 @@ For any MCP client that reads an `mcp.json`-style config (Claude Code, etc.), [.
 ## Tracker spreadsheet format
 
 The active tracker is [docs/Spreadsheet_checklist_for_document_tracking.csv](docs/Spreadsheet_checklist_for_document_tracking.csv). Earlier revisions also tracked an `.xlsx` mirror; that file has been removed. The CSV is the single canonical source — edit it directly and commit.
+
+For the spending-first scope, interpret the tracker in three tiers:
+
+- required core transaction sources that make household spending reconstruction possible
+- optional enrichment sources that improve categorization and context
+- deferred planning inputs that may matter later but should not block baseline spending analysis
+
+Missing optional or deferred items should not prevent useful monthly and annual spending discussions once the core transaction feeds are present.
 
 The intake view marks a row as "Obtained" if either the CSV's `Obtained ✓` column says so (manual override), or a file in the watch root auto-matches the row.
 

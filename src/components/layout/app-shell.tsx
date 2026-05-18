@@ -6,9 +6,9 @@ export type AppView = 'intake' | 'dashboard';
 interface AppShellProps extends PropsWithChildren {
   view: AppView;
   onViewChange: (view: AppView) => void;
-  totalDocuments: number;
-  obtainedDocuments: number;
-  missingDocuments: number;
+  coreSources: number;
+  coreReady: number;
+  openLater: number;
   liquidityGateCurrent: number;
   liquidityGate: number;
 }
@@ -17,9 +17,9 @@ export function AppShell({
   children,
   view,
   onViewChange,
-  totalDocuments,
-  obtainedDocuments,
-  missingDocuments,
+  coreSources,
+  coreReady,
+  openLater,
   liquidityGateCurrent,
   liquidityGate,
 }: AppShellProps) {
@@ -33,9 +33,9 @@ export function AppShell({
           <BrandMark />
           <TabNav view={view} onViewChange={onViewChange} />
           <StatusPills
-            obtained={obtainedDocuments}
-            total={totalDocuments}
-            missing={missingDocuments}
+            coreReady={coreReady}
+            coreSources={coreSources}
+            openLater={openLater}
             gateCurrent={liquidityGateCurrent}
             gateTarget={liquidityGate}
           />
@@ -79,7 +79,7 @@ function TabNav({ view, onViewChange }: TabNavProps) {
   return (
     <nav className="ml-2 flex shrink-0 items-center gap-1 rounded-full bg-ink/[0.04] p-1">
       <TabButton active={view === 'intake'} onClick={() => onViewChange('intake')}>
-        Document intake
+        Source intake
       </TabButton>
       <TabButton active={view === 'dashboard'} onClick={() => onViewChange('dashboard')}>
         Cash-flow dashboard
@@ -110,26 +110,26 @@ function TabButton({ active, onClick, children }: TabButtonProps) {
 }
 
 interface StatusPillsProps {
-  obtained: number;
-  total: number;
-  missing: number;
+  coreReady: number;
+  coreSources: number;
+  openLater: number;
   gateCurrent: number;
   gateTarget: number;
 }
 
-function StatusPills({ obtained, total, missing, gateCurrent, gateTarget }: StatusPillsProps) {
+function StatusPills({ coreReady, coreSources, openLater, gateCurrent, gateTarget }: StatusPillsProps) {
   return (
     <div className="ml-auto hidden items-center gap-5 text-[12px] text-ink/65 lg:flex">
       <div className="flex items-center gap-1.5">
         <span className="h-1.5 w-1.5 rounded-full bg-moss" />
         <span className="tnum">
-          <b className="font-semibold text-ink">{obtained}</b> / {total} obtained
+          <b className="font-semibold text-ink">{coreReady}</b> / {coreSources} core ready
         </span>
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 rounded-full bg-clay" />
+        <span className="h-1.5 w-1.5 rounded-full bg-ink/35" />
         <span className="tnum">
-          <b className="font-semibold text-ink">{missing}</b> missing
+          <b className="font-semibold text-ink">{openLater}</b> open later
         </span>
       </div>
       <div className="h-4 w-px bg-ink/15" />

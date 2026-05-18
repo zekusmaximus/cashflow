@@ -65,10 +65,11 @@ def read_document_metadata(
     scan_root = Path(folder_path).resolve() if folder_path else settings.watch_root
     tracker_rows = load_tracker_rows(settings.tracker_csv_path)
     candidates = list(iter_candidate_files(scan_root))
+    matched_by_row = assign_files_to_tracker_rows(tracker_rows, candidates)
 
     items: list[DocumentMetadataEntry] = []
     for tracker_row in tracker_rows:
-        matches = find_matches(tracker_row, scan_root, candidates)
+        matches = build_file_matches(scan_root, matched_by_row.get(tracker_row.id, []))
         items.append(
             DocumentMetadataEntry(
                 id=tracker_row.id,
@@ -149,16 +150,34 @@ def iter_candidate_files(scan_root: Path) -> list[Path]:
     return files
 
 
-def find_matches(row: DocumentTrackerRow, scan_root: Path, candidates: list[Path]) -> list[FileMatch]:
-    matches: list[tuple[float, Path]] = []
+def assign_files_to_tracker_rows(
+    tracker_rows: list[DocumentTrackerRow], candidates: list[Path]
+) -> dict[str, list[tuple[float, Path]]]:
+    # File-first winner-takes-all, matching the desktop checklist logic.
+    # Without this, one Chase CSV can mark both the primary Chase row and
+    # doc-005 (other credit cards) as obtained in MCP metadata.
+    assignments = {row.id: [] for row in tracker_rows}
 
     for candidate in candidates:
-        score = score_candidate(row, candidate)
-        if score >= MATCH_THRESHOLD:
-            matches.append((score, candidate))
+        best_score = -1.0
+        best_row_id: str | None = None
+        for row in tracker_rows:
+            score = score_candidate(row, candidate)
+            if score > best_score:
+                best_score = score
+                best_row_id = row.id
+        if best_row_id is not None and best_score >= MATCH_THRESHOLD:
+            assignments[best_row_id].append((best_score, candidate))
 
-    matches.sort(key=lambda item: item[0], reverse=True)
+    for matches in assignments.values():
+        matches.sort(key=lambda item: item[0], reverse=True)
 
+    return assignments
+
+
+def build_file_matches(
+    scan_root: Path, matches: list[tuple[float, Path]]
+) -> list[FileMatch]:
     results: list[FileMatch] = []
     for score, candidate in matches[:3]:
         stat = candidate.stat()
@@ -171,6 +190,18 @@ def find_matches(row: DocumentTrackerRow, scan_root: Path, candidates: list[Path
             )
         )
     return results
+
+
+def find_matches(row: DocumentTrackerRow, scan_root: Path, candidates: list[Path]) -> list[FileMatch]:
+    matches: list[tuple[float, Path]] = []
+
+    for candidate in candidates:
+        score = score_candidate(row, candidate)
+        if score >= MATCH_THRESHOLD:
+            matches.append((score, candidate))
+
+    matches.sort(key=lambda item: item[0], reverse=True)
+    return build_file_matches(scan_root, matches)
 
 
 def score_candidate(row: DocumentTrackerRow, candidate: Path) -> float:

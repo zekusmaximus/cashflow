@@ -49,11 +49,14 @@ def recent_watch_events() -> str:
 
 
 @mcp.prompt(title="Financial Detective")
-def financial_detective(objective: str = "Classify newly imported transactions") -> str:
+def financial_detective(
+    objective: str = "Analyze monthly and annual household spending"
+) -> str:
     return (
         "You are the Financial Detective for Liquidity Gate. Read docs://master-index first, then docs://tracker. "
-        "Use actual documents as the primary factual record, never double-count transfers or card payments, "
-        "split RSU events into their compensation, withholding, retained-share, sold-share, and cash components, "
+        "Start with core transaction sources and current spending data, not full document completeness. "
+        "Treat payroll, tax, insurance, debt, rental, and other planning files as optional unless the task explicitly depends on them. "
+        "Never double-count transfers or card payments as spending, "
         f"and keep the current objective in focus: {objective}."
     )
 
