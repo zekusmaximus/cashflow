@@ -281,6 +281,7 @@ class PairTransfersResult(BaseModel):
     pairs_created: int = 0
     candidates_examined: int = 0
     already_paired_skipped: int = 0
+    ally_inbound_reclassified: int = 0
     unpaired: list[UnpairedTransfer] = Field(default_factory=list)
     ambiguous: list[AmbiguousTransfer] = Field(default_factory=list)
     suspected_untagged: list[SuspectedUntagged] = Field(default_factory=list)

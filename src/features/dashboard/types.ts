@@ -38,3 +38,24 @@ export interface DashboardSnapshot {
   leakageCategories: LeakageCategory[];
   reconciliations: ReconciliationPeriod[];
 }
+
+export interface Transaction {
+  id: string;
+  occurredOn: string;
+  accountLabel: string;
+  descriptionRaw: string;
+  merchantNormalized: string | null;
+  primaryCategory: string;
+  subcategory: string | null;
+  amount: number;
+  direction: 'inflow' | 'outflow' | 'transfer';
+}
+
+export interface TransactionPage {
+  rows: Transaction[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export type TransactionDirectionFilter = 'all' | 'inflow' | 'outflow';

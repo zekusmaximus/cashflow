@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-18 (night)
+**Last updated:** 2026-05-18 (night, post-ally-fix-and-transaction-register)
 
 ## Snapshot
 
@@ -33,16 +33,18 @@ Durable transaction overrides are now live and validated: Cowork can store
 payee/category/role/lifecycle fixes that survive a future YTD-to-monthly
 re-import for the same logical transaction.
 
-Rule-based classifier is now live: 17 rules covering 609 of 1,144
-transactions (53%). First-pass Cowork session on 2026-05-18 added 10
-merchant rules (Toast POS, Amazon 365/Fresh, Big Y, Instacart, Reddit Ads,
-Prime Video, CVS, Apple subscriptions, pet care, Trader Joe's), dropping
-unclassified from 874 to 535. Three MCP tools available for ongoing
-rule management: `list_classification_rules`, `upsert_classification_rule`,
-`apply_classifier`. Classification runs automatically on every
-`ingest_documents` call. 535 rows remain in the triage queue — next
-round should cover Zara, Sephora, French Cleaners, Google One,
-Servomation, and the Westin gift shop.
+Rule-based classifier is at 86.7% coverage: 130 rules, 992 of 1,144
+transactions classified. Two Cowork sessions on 2026-05-18 built the full
+rule set — first pass (10 rules, 53%) plus a second pass (113 new rules)
+covering all known targets: Zara, Sephora, French Cleaners, Servomation,
+Google One, Venmo, Mobile Check Dep, streaming, subscriptions, utilities,
+retail, dining, fuel, pet, services, advertising, travel, entertainment,
+donations, tax, insurance, loans, and property fees. Two catchall rules
+(`rule-sp-catchall`, `rule-square-prefix-catchall`) absorb future
+SP*/SQ* long-tail merchants automatically. 152 rows remain unclassified
+(15 inflows, 137 single-occurrence small-merchant outflows) — pushing
+above 90% would require per-merchant rules or manual overrides that don't
+materially improve spending analytics.
 
 Cowork integration optimized 2026-05-18: `docs://project-status` MCP resource
 added (4 resources total), classifier and override tools wired into the
@@ -51,27 +53,27 @@ resource URIs, `mcp-server.json` now points to the venv Python directly, and
 the watch-root `.claudecowork` directory is a junction to the repo — all 7
 identified Cowork deficiencies resolved.
 
-**Residual diagnostic surface** (25 unpaired + 4 ambiguous) splits into
-three categories that each need a different fix, captured in detail in
-auto-memory `unpaired-transfer-diagnostics`:
+**Residual diagnostic surface** (reduced after Ally fix) splits into two
+remaining categories; `unpaired-transfer-diagnostics` in auto-memory has
+full row-level detail:
 
 1. **IonBank ONLINE XFR (~14 Beacon rows)** — partner account not yet
    ingested. Resolved when the other IonBank account's CSV arrives.
-2. **Ally bonus-check / direct-deposit inbounds (3 rows)** — Ally parser
-   regex is greedy and tags real inflows as transfer. Fix path: parser
-   refinement OR classifier override OR manual mark.
-3. **Multi-leg same-day Webster/Beacon ambiguity (4 + 4 rows on 2/25,
+2. **Multi-leg same-day Webster/Beacon ambiguity (4 + 4 rows on 2/25,
    2/27, 4/3, 4/6)** — same amount on multiple legs with mixed clearing
    delays. Algorithm can't deterministically choose without
    description-aware pairing or manual triage.
 
-**Next single task**: second classifier pass — add rules for the 535
-remaining unclassified rows (Zara, Sephora, French Cleaners, Google One,
-Servomation/vending, Westin gift shop, and others). Use
-`query_cashflow_data` to pull the next top-20 unclassified descriptions,
-then `upsert_classification_rule` + `apply_classifier`. After coverage
-reaches ~75%, begin Dashboard build-out: Transaction Register tab with
-classification edit UI (roadmap §6).
+Previously reported item 2 (Ally inbound-from rows tagged as transfer with
+no counterpart) is now **resolved**: `pair_transfers` auto-reclassifies
+unpaired Ally HYSA `Requested transfer from …` rows as `direction='inflow'`
+after the pairing pass. The three affected rows ($4,500 on 2026-01-05,
+$5,080 on 2026-04-08, $1,000 on 2026-05-08) will be corrected on the next
+`pair_transfers` call.
+
+**Next single task**: Transaction Register classification edit UI — inline
+category/merchant overrides calling `upsert_transaction_override` (roadmap §6,
+read-only register is now live).
 
 ## Architecture (one-screen reminder)
 
@@ -93,11 +95,11 @@ Tauri desktop app  (npm run tauri dev)
   └─ @tauri-apps/plugin-sql reads/writes the shared DB
 
 Python MCP server  (launched by Claude Desktop subprocess)
-  └─ 7 tools, 3 resources, 1 prompt
+  └─ 7 tools, 4 resources, 1 prompt
   └─ Same DB, write connection separate from read-only query connection
 
 Claude Cowork / Claude Desktop analyst project
-  └─ If the active project is the watch root, custom instructions should mirror the repo's .claudecowork/agent.md
+  └─ Watch-root .claudecowork/ is a junction to the repo; instructions stay in sync automatically
   └─ Calls MCP tools, reads MCP resources
 ```
 
@@ -155,6 +157,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
   - [x] Surfaces unpaired and ambiguous rows for diagnosis
   - [x] Optional suspected_untagged report for parser regex gaps
 - [x] All Beacon `ALLY BANK $TRANSFER` and `ALLY BANK P2P` rows pair with their Ally counterparts
+- [x] Unpaired Ally HYSA `Requested transfer from …` rows auto-reclassified as `direction='inflow'` after the pairing pass (`ally_inbound_reclassified` reported in `PairTransfersResult`)
 
 ### MCP integration
 - [x] 7 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`
@@ -174,6 +177,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Watch-root status banner showing root path and indexed file count
 - [x] Cash Flow Dashboard: real Inflow/Outflow bars from `monthly_cashflow_summary` view
 - [x] React Query: 5s staleTime + refetchOnWindowFocus for snappy local refresh
+- [x] Transaction Register section on Dashboard: paginated table (50/page) with direction filter (Outflows default / Inflows / All), merchant/description display, category badge (unclassified highlighted), pagination controls
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -200,6 +204,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] 3 MCP tools registered in server.py
 - [x] 18 tests in test_classifier.py (124/124 suite passing)
 - [x] First Cowork rule-building session: 10 merchant rules, 609/1,144 classified (53%)
+- [x] Second Cowork rule-building session 2026-05-18: 113 new rules, 992/1,144 classified (86.7%); 130 rules total; two SP*/SQ* catchalls absorb future long-tail merchants
 
 ## Roadmap
 
@@ -213,13 +218,14 @@ normal use of the repo for transaction-based spending analysis.
 - [x] Classifier module (`classifier.py`) — first-match wins, protects manual overrides, writes provenance to metadata_json
 - [x] Auto-runs on every `ingest_documents` call
 - [x] Three MCP tools: `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`
-- [x] 7 seed rules shipped with schema; 10 merchant rules added via Cowork on 2026-05-18
-- [x] 609/1,144 transactions classified (53%); 535 remain — ongoing via Cowork rule-building sessions
+- [x] 7 seed rules shipped with schema; 130 rules total after two Cowork sessions
+- [x] 992/1,144 transactions classified (86.7%); 152 remain (single-occurrence long tail)
+- [x] Two catchall rules (`rule-sp-catchall`, `rule-square-prefix-catchall`) absorb future SP*/SQ* merchants automatically
 - [ ] Manual override UI for unclassified rows (Dashboard build-out item)
 
-### 1b. Second classifier pass (next)
-- [ ] Pull top-20 unclassified descriptions, add rules for Zara, Sephora, French Cleaners, Google One, Servomation, Westin, and remaining long tail
-- [ ] Target: ~75% coverage before starting Transaction Register tab
+### 1b. Second classifier pass ✓
+- [x] 113 new rules across four batches covering all known targets and full retail/dining/streaming/subscription/utility/pet/service long tail
+- [x] 86.7% coverage achieved (992/1,144); target was 75%
 
 ### 2. Optional later: Paystub PDF extraction
 - [ ] Decide: LLM-based (privacy tradeoff) vs local OCR + per-employer templates
@@ -246,8 +252,9 @@ normal use of the repo for transaction-based spending analysis.
 - [ ] Optional handoff deliverable when broader planning support is explicitly requested
 
 ### 6. Dashboard build-out
-- [ ] 14 sections per master index §6 (currently 4 cards: cash flow, HYSA gate, leakage, reconciliation)
-- [ ] Transaction Register with classification edit
+- [ ] 14 sections per master index §6 (currently 5 cards: cash flow, HYSA gate, leakage, reconciliation, transaction register)
+- [x] Transaction Register — read-only paginated ledger with direction filter and category display
+- [ ] Transaction Register — inline classification edit UI (calls `upsert_transaction_override`)
 - [ ] HYSA trajectory chart
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
 - [ ] Subscription audit / leakage card driven from real data
@@ -257,12 +264,17 @@ normal use of the repo for transaction-based spending analysis.
 ## Known issues and loose ends
 
 - [ ] **Chase same-day dedup backfill.** Fixed in code: a backwards-compatible `|seqN` suffix now disambiguates duplicate (date, amount, description) rows within a file, while the first occurrence keeps the legacy hash so already-ingested rows still match on re-import. The 12 collapsed rows from the original Chase ingest remain absent in the DB; they'll appear automatically next time the Chase CSV is re-exported and re-ingested. No data backfill needed otherwise.
-- [ ] **Untagged transfer patterns from Beacon parser** (need classifier work, not regex):
-  - `FID BKG SVC LLC MONEYLINE` (Fidelity sweeps, often $15)
-  - `VENMO PAYMENT`
-  - `MOBILE CHECK DEP`
+- [x] **Untagged transfer patterns from Beacon parser** — FID BKG SVC LLC MONEYLINE, VENMO PAYMENT, and MOBILE CHECK DEP are now covered by classifier rules added in the second pass.
 - [x] **Watch-root Cowork project isolation resolved.** `C:\Users\Jeff\Documents\Cashflow\.claudecowork` is now a junction to the repo `.claudecowork\` directory — `agent.md`, `config.json`, and `mcp-server.json` are shared automatically. No manual mirroring needed.
-- [ ] **Three Ally HYSA inbound transfers have no Beacon counterpart.** Verified via DB query 2026-05-13: $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). The 1/5 row is **Jeff's bonus check deposit** (confirmed 2026-05-17) — classify as event income, not a transfer. The 4/8 and 5/8 rows are still unconfirmed origin; the 4/8 $5,080 is close to but not equal to Webster's 4/6 $5,000 `CK TRANSFER` outbound, so amount-based pairing won't catch it. Likely need explicit document confirmation rather than pattern-matching.
+- [x] **Three Ally HYSA inbound transfers have no Beacon counterpart — resolved.** $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). `pair_transfers` now auto-reclassifies unpaired Ally HYSA inbound-from rows as `direction='inflow'`; these three rows will be corrected on the next tool run. The 1/5 row is confirmed as Jeff's bonus check deposit; origin of the 4/8 and 5/8 rows is still unconfirmed but both are correctly treated as inflows.
+- [ ] **Medium-confidence classifications to confirm** (flagged by second classifier pass, 2026-05-18):
+  - Render, Supabase, Namecheap, GitHub, Roll20, OpenAI — currently `fixed_obligation/subscriptions_apps` (Jeff). Flip to `business_expense` if used for professional/author work.
+  - PayLease / GW Management (10 rows, ~$10K+/yr) — currently `fixed_obligation/property_fees`. Confirm: primary-residence HOA, rental HOA, or rental management fees. Rental category may be more accurate.
+  - US Bank Loan Payment — confirm whether auto, mortgage, or other; subcategory currently `loan_payment`.
+  - Venmo → Ashley Calabrese (7 rows) — currently `variable_lifestyle/intra_household`. If these are intra-household reimbursements, consider excluding from spending totals via `upsert_transaction_override`.
+  - PMUSA — guessed Philip Morris USA Rewards; confirm.
+  - Tiffani* / Tiffani for W — guessed boutique; confirm merchant.
+  - Tainara Gisele Rosa dos Santos — recurring Zelle; likely cleaning or personal service. Confirm and reclassify if needed.
 
 ## How to update this file
 
