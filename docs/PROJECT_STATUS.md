@@ -12,8 +12,11 @@ remains the canonical project plan; this file is the operational heartbeat.
 End-to-end spending-first pipeline works for four account types: drop a
 Chase, Beacon, Ally HYSA, or Webster (Ashley) CSV in the watch root, the
 Tauri app auto-matches core sources and later context, the dashboard
-reflects real numbers, and Claude Desktop can call the MCP server's tools
-to ingest, pair transfers, and analyze monthly and annual spending. Real-DB
+reflects real numbers, and Claude Cowork / Claude Desktop can call the MCP
+server's tools to ingest, pair transfers, analyze monthly and annual
+spending, and persist exact-match manual cleanup. Current analyst work can
+be anchored either to the repo or directly to the watch root, as long as the
+Liquidity Gate MCP is attached. Real-DB
 run on 2026-05-17 produced 31 cross-account pairs
 (including the 5×5 Webster → Beacon cluster on 2026-01-21, which the
 connected-components fallback retires deterministically) and 12 fresh
@@ -25,6 +28,10 @@ priorities, and the intake UI now treat core transaction feeds as the
 baseline for useful analysis. Payroll, tax, insurance, debt, rental, and
 other planning inputs remain available as optional later layers rather than
 baseline blockers.
+
+Durable transaction overrides are now live and validated: Cowork can store
+payee/category/role/lifecycle fixes that survive a future YTD-to-monthly
+re-import for the same logical transaction.
 
 **Residual diagnostic surface** (25 unpaired + 4 ambiguous) splits into
 three categories that each need a different fix, captured in detail in
@@ -52,6 +59,14 @@ Variable Lifestyle Spend tabs.
 
 ## Architecture (one-screen reminder)
 
+Two local folders matter:
+
+- Repo workspace: `C:\Users\Jeff\Projects\cashflow` — code, docs,
+  `.claudecowork`, and the MCP source of truth.
+- Watch root / analyst folder: `C:\Users\Jeff\Documents\Cashflow` —
+  private CSVs, `balances.toml`, and the day-to-day Cowork project if you
+  prefer to work directly where files land.
+
 Three processes share one SQLite database at
 `%APPDATA%\com.jeff.liquiditygate\liquidity-gate.db` (Windows) or platform
 equivalent. Override via `LIQUIDITY_GATE_DB_PATH`.
@@ -62,11 +77,11 @@ Tauri desktop app  (npm run tauri dev)
   └─ @tauri-apps/plugin-sql reads/writes the shared DB
 
 Python MCP server  (launched by Claude Desktop subprocess)
-  └─ 5 tools, 3 resources, 1 prompt
+  └─ 7 tools, 3 resources, 1 prompt
   └─ Same DB, write connection separate from read-only query connection
 
-Claude Desktop chat
-  └─ .claudecowork/agent.md persona (paste into Project custom instructions)
+Claude Cowork / Claude Desktop analyst project
+  └─ If the active project is the watch root, custom instructions should mirror the repo's .claudecowork/agent.md
   └─ Calls MCP tools, reads MCP resources
 ```
 
@@ -157,6 +172,8 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] README with first-time setup, naming conventions, Cowork wiring
 - [x] Database location documented in Local-First Rules
 - [x] [`.claudecowork/`](.claudecowork/) descriptors for Cowork integration
+- [x] Watch-root defaults and docs consistently refer to `C:\Users\Jeff\Documents\Cashflow`
+- [x] Repo-vs-watch-root split documented for Cowork analyst vs builder work
 
 ## Roadmap
 
@@ -212,7 +229,7 @@ normal use of the repo for transaction-based spending analysis.
   - `FID BKG SVC LLC MONEYLINE` (Fidelity sweeps, often $15)
   - `VENMO PAYMENT`
   - `MOBILE CHECK DEP`
-- [ ] **Project custom instructions not yet pasted in claude.ai.** Paste the current contents of [.claudecowork/agent.md](../.claudecowork/agent.md) into the cashflow Project's custom instructions so every chat auto-loads the persona. (The persona itself was updated 2026-05-13 to reference the `docs://master-index` and `docs://tracker` MCP resources instead of file paths.)
+- [ ] **Watch-root Cowork projects do not inherit repo-local instructions automatically.** If the active Cowork project is anchored to `C:\Users\Jeff\Documents\Cashflow` instead of the repo, mirror the current contents of [.claudecowork/agent.md](../.claudecowork/agent.md) into that project's custom instructions so the spending-first persona stays aligned with the MCP resources and tool flow.
 - [ ] **Three Ally HYSA inbound transfers have no Beacon counterpart.** Verified via DB query 2026-05-13: $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). The 1/5 row is **Jeff's bonus check deposit** (confirmed 2026-05-17) — classify as event income, not a transfer. The 4/8 and 5/8 rows are still unconfirmed origin; the 4/8 $5,080 is close to but not equal to Webster's 4/6 $5,000 `CK TRANSFER` outbound, so amount-based pairing won't catch it. Likely need explicit document confirmation rather than pattern-matching.
 
 ## How to update this file

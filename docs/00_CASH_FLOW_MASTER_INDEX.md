@@ -2,7 +2,8 @@
 
 **Last updated:** 2026-05-18  
 **Maintained by:** Jeff, with ChatGPT/AI-assisted review  
-**Project folder:** Cash Flow  
+**Repo workspace:** `C:\Users\Jeff\Projects\cashflow`  
+**Watch root / analyst folder:** `C:\Users\Jeff\Documents\Cashflow`  
 **Purpose:** Single landing page for any new chat session working on the household spending reconstruction workspace. Read this file first, then the tracker CSV.
 
 ---
@@ -14,6 +15,8 @@ This project exists to build a **local-first, transaction-first household spendi
 > Where is money actually going each month, what is recurring versus one-off, and which source accounts still need to be ingested before the picture is trustworthy?
 
 Useful spending analysis should begin once the core transaction sources are present. Payroll, tax, insurance, debt, rental, and capital-planning documents are optional later inputs unless a specific task explicitly requires them.
+
+The current parser-backed baseline is Chase credit-card CSVs, Beacon checking CSVs, Ally HYSA CSVs, and Webster (Ashley) checking CSVs. These are enough to begin useful transaction-level and month-level household spending analysis.
 
 The first project file is:
 
@@ -35,7 +38,7 @@ The current tracker identifies **86 tracked document/data items** across nine ca
 
 Only a subset of those items is required for baseline spending reconstruction. The rest should be treated as optional enrichments or deferred planning inputs that can be layered in later.
 
-Project architecture remains local-file based. Core spending analysis starts with transaction CSVs and can later incorporate supporting PDFs or screenshots when they materially improve classification or verification. See `2026_Cashflow_Decision_Log.md` for architecture decisions and closed classification items.
+Project architecture remains local-file based. Repo docs, prompts, and code live in the repo workspace; raw financial files live in the external watch root and are exposed to Claude through the Liquidity Gate MCP and, when desired, a Cowork project anchored directly to the watch root. Core spending analysis starts with transaction CSVs and can later incorporate supporting PDFs or screenshots when they materially improve classification or verification. See `2026_Cashflow_Decision_Log.md` for architecture decisions and closed classification items.
 
 ---
 
@@ -43,7 +46,9 @@ Project architecture remains local-file based. Core spending analysis starts wit
 
 Use this prompt:
 
-> Continuing the 2026 Household Spending Reconstruction workspace. Read `00_CASH_FLOW_MASTER_INDEX.md` first, then `Spreadsheet_checklist_for_document_tracking.csv`. Start with the available transaction exports and reconstruct monthly and annual spending. Ask for additional source accounts only when transaction coverage is incomplete. Treat payroll, tax, insurance, and broader planning documents as optional unless the task explicitly depends on them.
+> Continuing the 2026 Household Spending Reconstruction workspace. Read `docs://master-index` first, then `docs://tracker`. Start with the available transaction exports and reconstruct monthly and annual spending. Ask for additional source accounts only when transaction coverage is incomplete. Treat payroll, tax, insurance, and broader planning documents as optional unless the task explicitly depends on them.
+
+If the active Cowork project is anchored to the watch root rather than the repo, mirror the current Financial Detective instructions into that project's custom instructions. Repo-local `.claudecowork/` files do not auto-apply there.
 
 If the chat is about a specific task, add one of these:
 
@@ -141,7 +146,7 @@ Do not re-open any of these items absent a new contradictory document.
 - Exclude later checking payments to Chase as spending; classify as card-payment transfers.
 - Exclude Beacon → Ally or other savings transfers from spending.
 - Classify Ally → Beacon as liquidity support, not income.
-- Classify Ashley → joint checking as household funding transfer unless payroll/RSU source records show external income.
+- Classify Webster / Ashley → Beacon or other joint-checking transfers as household funding transfer unless source records show external income.
 - Split RSUs into compensation income, withholding, shares sold, shares retained, and net cash received.
 - Split HSA activity into payroll contributions, employer contributions, investment activity, distributions, and medical spending.
 
@@ -176,7 +181,7 @@ Treat the tracker as a scope guide rather than a hard gate:
 
 ### Tracker maintenance rules
 
-- Mark a document obtained only when the file is uploaded to this Cash Flow project or clearly available in the connected folder.
+- Mark a document obtained only when the file is uploaded to the active watch/Cowork folder or clearly available in the connected local folder.
 - If a document already exists in the capital-efficiency project, note: “Available in capital-efficiency project; copy/upload if needed.”
 - If a document is superseded by a newer file, keep the old one noted but mark the newer file as controlling.
 - If a document is not applicable, mark it “N/A” in notes rather than deleting the line.
@@ -196,11 +201,13 @@ These sources are enough to begin useful monthly and annual household spending d
 |---:|---|---|
 | 1 | Chase credit-card CSVs | Main discretionary and semi-discretionary spending source |
 | 2 | Beacon / joint checking CSVs | Bills, payroll deposits, card payments, transfers, and checks |
-| 3 | Ashley separate checking CSV/statements, if active | Closes any household funding or spending that bypasses joint checking |
+| 3 | Webster / Ashley checking CSV/statements, if active | Closes any household funding or spending that bypasses joint checking |
 | 4 | Ally HYSA CSV/statements, when relevant | Distinguishes savings transfers and liquidity moves from spending |
 | 5 | Venmo / PayPal / Zelle / Cash App history, if material | Captures household spending or reimbursements that bypass the core bank feeds |
 
 Once the relevant Tier 1 sources are present, Claude Cowork should be able to have useful monthly and annual spending discussions even if later tiers are still missing.
+
+At the moment, the parser-backed Tier 1 baseline is already present in the active watch root: Chase, Beacon, Ally HYSA, and Webster checking.
 
 ### Tier 2 — Optional enrichment for better categorization
 
@@ -235,7 +242,7 @@ Use these only when the task explicitly shifts from spending reconstruction into
 
 ## 6. Dashboard Structure
 
-The baseline dashboard should start with transaction-focused sections such as source coverage, transaction register, monthly spending, variable lifestyle spend, transfer exclusions, and recurring-charge review. Broader planning views can remain available later as optional layers.
+The baseline dashboard should start with transaction-focused sections such as source coverage, transaction register, monthly spending, variable lifestyle spend, transfer exclusions, and recurring-charge review. The shipped UI currently covers Source Intake plus a spending-first dashboard; broader planning views can remain available later as optional layers.
 
 The finished dashboard can include these sections or spreadsheet tabs:
 
@@ -279,7 +286,7 @@ This matters more than perfect category labels. The dashboard’s purpose is not
 
 ---
 
-## 8. Monthly Normalization Rules
+## 8. Optional Later Layer — Monthly Normalization Rules
 
 The dashboard should show both actual and normalized spending.
 
@@ -301,7 +308,7 @@ Examples:
 
 ---
 
-## 9. Key Output Metrics
+## 9. Optional Later Layer — Key Output Metrics
 
 Each dashboard refresh should produce these numbers:
 
@@ -328,7 +335,7 @@ Each dashboard refresh should produce these numbers:
 
 ---
 
-## 10. Capital-Plan Feasibility Tests
+## 10. Optional Later Layer — Capital-Plan Feasibility Tests
 
 The dashboard should explicitly test these planning moves:
 
@@ -348,7 +355,7 @@ The dashboard should explicitly test these planning moves:
 
 ---
 
-## 11. Importable Appendix Specification
+## 11. Optional Later Layer — Importable Appendix Specification
 
 The main deliverable for the capital-efficiency plan is:
 
@@ -402,7 +409,7 @@ Examples:
 
 - `2026-04-30_Chase_YTD_CardActivity.csv`
 - `2026-04-30_Beacon_Checking_YTD.csv`
-- `2026-04-30_Ashley_Checking_YTD.csv`
+- `2026-05-17_Webster_Checking.csv`
 - `2026-04-30_Ally_HYSA_Statement.pdf`
 - `2026-04-17_Ashley_Paystub.pdf`
 - `2026-05-01_Ion_Primary_Mortgage_Statement.pdf`
@@ -417,20 +424,17 @@ If a working memo is superseded, do not delete it. Rename or move it as:
 
 ---
 
-## 13. Known Open Items at Launch
+## 13. Current Open Inputs and Gaps
 
-These are the highest-impact missing items based on prior cash-flow work and the new tracker:
+These are the current high-value inputs or cleanup areas after the spending-first reset and current parser-backed ingest pass:
 
 | Item | Why it matters | Status |
 |---|---|---|
-| Ashley checking export | Closes the missing source of many Chase payments and household transfers | Open |
-| Current full Chase CSV | Main lifestyle-spend register | Open in new folder unless already uploaded |
-| Current full Beacon checking CSV | Joint checking and fixed-payment register | Open in new folder unless already uploaded |
-| Ally HYSA YTD export/statements | Required for $80K gate modeling | Open in new folder unless already uploaded |
-| Current 2026 paystubs for both spouses | Required for forward net-pay model | Partial in capital-efficiency project; verify coverage |
-| Insurance premium schedules and quotes | Required for fixed-cost scenario modeling | Open / pending |
-| Rental income and expense records | Required for true rental cash-flow branch | Open |
-| Subscription screenshots | Required for app/subscription audit | Open |
+| IonBank or other counterpart transfer export, if available | Explains the remaining Beacon `ONLINE XFR` rows that currently look like transfers without a paired source | Optional / open |
+| Material Venmo / PayPal / Zelle / Cash App export | Captures spending or reimbursements that bypass the core bank + card feeds | Conditional |
+| Durable manual cleanup for checks, Venmo labels, ambiguous payees, and generic transfers | Improves merchant/category accuracy now and survives later re-imports through transaction overrides | Active workflow |
+| Monthly-file replacement plan for current YTD sources | Needed before swapping YTD exports for monthly files; do not mix both in one DB without an explicit reset or migration decision | Later, but important |
+| Broader planning files (payroll, tax, insurance, debt, rental) | Only needed when the question shifts beyond spending reconstruction | Deferred |
 
 ---
 
@@ -439,59 +443,38 @@ These are the highest-impact missing items based on prior cash-flow work and the
 These assumptions are provisional and should be replaced with document-backed numbers as files are uploaded:
 
 1. Chase is the primary household credit card for discretionary spending.
-2. Beacon/joint checking captures many fixed obligations and Jeff-side income, but not the full household cash-flow picture.
-3. Ashley maintains or uses another account that must be added to close the loop.
+2. Beacon / joint checking, Webster / Ashley checking, and Ally HYSA close most of the currently relevant transfer and household-funding loops.
+3. Useful spending analysis should start from the available Chase, Beacon, Webster, and Ally feeds before broader documents are requested.
 4. Ally HYSA is the primary liquidity and $80K gate account.
 5. Bonus, RSU, refunds, and reimbursements should be treated as event income, not ordinary monthly income.
-6. Pet spending must be separated into routine, medical abnormal, grooming/daycare/boarding, and insurance premiums/reimbursements.
-7. Subscription/app leakage is likely real but should be confirmed before cuts are recommended.
-8. The base capital-efficiency plan remains in force unless the dashboard shows red feasibility.
+6. Card payments and inter-account transfers must be paired or excluded before category totals are trusted.
+7. Exact-match manual cleanup should be stored as durable transaction overrides when the same issue is likely to recur on future imports.
+8. Material P2P usage still needs its own export if it bypasses the core bank/card feeds.
+9. Broader planning documents remain out of scope unless the user explicitly asks for those topics.
 
 ---
 
-## 15. First Build Sequence
+## 15. Default Working Sequence
 
-### Step 1 — Intake and tracker update
+### Step 1 — Read the MCP resources
 
-Upload or copy the Phase 1 documents. Update the tracker with obtained status, date added, and notes.
+Read `docs://master-index` and `docs://tracker` first.
 
-### Step 2 — Reconstruct 2026 YTD actual cash flow
+### Step 2 — Measure source coverage and ingest new files
 
-Build combined transaction tables for:
+Use `read_document_metadata` to see which core sources are already present. If new parser-backed files are available, run `ingest_documents`.
 
-- Chase
-- Beacon / joint checking
-- Ashley checking
-- Ally HYSA
-- Venmo/PayPal/Zelle, if provided
+### Step 3 — Neutralize transfer inflation
 
-Classify transfers so spending is not double-counted.
+Use `pair_transfers` so card payments and inter-account moves do not inflate spending. Treat residual unpaired rows as diagnostics, not automatic spending.
 
-### Step 3 — Normalize monthly burn
+### Step 4 — Analyze spending and store durable cleanup
 
-Separate:
+Use `query_cashflow_data` for monthly and annual summaries, merchant/category review, recurring-charge review, and anomaly checks. When a manual label should survive future imports, store it through `upsert_transaction_override`.
 
-- fixed monthly obligations
-- variable lifestyle spend
-- seasonal/annual sinking funds
-- one-time abnormal items
-- event income
+### Step 5 — Layer on optional later work only if needed
 
-### Step 4 — Optional later: build forward projection
-
-Project through 12/31/2027:
-
-- normal net pay after current/planned payroll elections
-- fixed obligations
-- insurance premiums
-- rental cash flow
-- known annual bills
-- expected bonus/RSU events
-- HYSA balance trajectory
-
-### Step 5 — Produce appendix
-
-Create `2026_Household_Cashflow_Reality_Appendix.md` with a clear Green/Yellow/Red conclusion and a concise recommendation table.
+Add classifier rules, normalization, planning documents, forward projection, or appendix output only when the current question explicitly calls for them.
 
 ---
 
@@ -516,10 +499,10 @@ Do not:
 Use this format unless a narrower task is requested:
 
 1. **Bottom line**
-2. **Data used / data missing**
+2. **Data used / material gaps**
 3. **What changed since last update**
-4. **Cash-flow findings**
-5. **Capital-plan feasibility impact**
+4. **Spending findings**
+5. **Transfer / classification caveats**
 6. **Risks / caveats**
 7. **Specific next steps**
 
@@ -527,8 +510,8 @@ Use this format unless a narrower task is requested:
 
 ## 18. Immediate Next Steps
 
-1. Put this file in the Cash Flow folder as `00_CASH_FLOW_MASTER_INDEX.md`.
-2. Keep `Spreadsheet_checklist_for_document_tracking.csv` as the active intake tracker.
-3. Upload Tier 1 transaction sources first, starting with Chase, Beacon, Ashley checking if active, Ally when relevant, and materially used P2P exports.
-4. After the first core-source upload pass, create the first spending reconstruction.
-5. Only after the spending reconstruction is reliable should broader planning inputs or an export appendix be considered.
+1. Keep this file and `Spreadsheet_checklist_for_document_tracking.csv` served through the MCP resources.
+2. Continue using the four current parser-backed core feeds as the default analysis base.
+3. When future monthly CSVs replace YTD files, make that a deliberate reset or migration step rather than mixing YTD and monthly files in the same database.
+4. Use `pair_transfers` before drawing spending conclusions, and use durable overrides for checks, Venmo/payee cleanup, and sticky category fixes that should survive re-imports.
+5. Request broader planning documents only when a later question explicitly depends on them.

@@ -25,7 +25,7 @@ I'm applying a visual redesign to the Document Intake and Cash-Flow Dashboard vi
 
 7. After implementing, verify:
    - `npm run dev` renders both views cleanly at 1280px, 1024px, and 768px with no horizontal scroll
-   - A long watch-root path (e.g. `/Users/jeff/Library/Application Support/CashFlow/intake/2026-archive/`) truncates instead of pushing the file count off-screen
+   - A long watch-root path (e.g. `/Users/jeff/Library/Application Support/Cashflow/intake/2026-archive/`) truncates instead of pushing the file count off-screen
    - `npm test` still passes
    - The Tauri build (`npm run tauri dev`) still talks to `list_watch_root_files`
 
