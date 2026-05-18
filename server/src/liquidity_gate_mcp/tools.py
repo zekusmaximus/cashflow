@@ -8,16 +8,26 @@ import re
 
 from .config import ServerSettings
 from .database import DatabaseManager
+from .classifier import (
+    apply_classifier as apply_classifier_impl,
+    list_classification_rules as list_classification_rules_impl,
+    upsert_classification_rule as upsert_classification_rule_impl,
+)
 from .models import (
+    ApplyClassifierRequest,
+    ApplyClassifierResult,
     DocumentMetadataEntry,
     DocumentMetadataSummary,
     DocumentTrackerRow,
     FileMatch,
+    ListClassificationRulesResult,
     ReadDocumentMetadataResult,
     ReconcileTransactionsRequest,
     ReconcileTransactionsResult,
     SqlQueryRequest,
     SqlQueryResult,
+    UpsertClassificationRuleRequest,
+    UpsertClassificationRuleResult,
     UpsertTransactionOverrideRequest,
     UpsertTransactionOverrideResult,
 )
@@ -246,6 +256,27 @@ def expected_extensions(format_text: str) -> set[str]:
     if "invoice" in normalized:
         extensions.update({".pdf", ".csv"})
     return extensions
+
+
+# ---------------------------------------------------------------------------
+# Classifier tool wrappers
+# ---------------------------------------------------------------------------
+
+
+def apply_classifier(
+    database: DatabaseManager, request: ApplyClassifierRequest
+) -> ApplyClassifierResult:
+    return apply_classifier_impl(database, request)
+
+
+def upsert_classification_rule(
+    database: DatabaseManager, request: UpsertClassificationRuleRequest
+) -> UpsertClassificationRuleResult:
+    return upsert_classification_rule_impl(database, request)
+
+
+def list_classification_rules(database: DatabaseManager) -> ListClassificationRulesResult:
+    return list_classification_rules_impl(database)
 
 
 def tokenize(value: str) -> set[str]:

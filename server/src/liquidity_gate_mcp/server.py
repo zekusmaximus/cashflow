@@ -9,17 +9,22 @@ from .config import load_settings
 from .database import DatabaseManager
 from .ingest import ingest_watch_root as ingest_watch_root_impl
 from .models import (
+    ApplyClassifierRequest,
     PairTransfersRequest,
     ReconcilePeriodsRequest,
     ReconcileTransactionsRequest,
     SqlQueryRequest,
+    UpsertClassificationRuleRequest,
     UpsertTransactionOverrideRequest,
 )
 from .reconciliation import reconcile_periods as reconcile_periods_impl
 from .tools import (
+    apply_classifier as apply_classifier_impl,
+    list_classification_rules as list_classification_rules_impl,
     query_cashflow_data as query_cashflow_data_impl,
     read_document_metadata as read_document_metadata_impl,
     reconcile_transactions as reconcile_transactions_impl,
+    upsert_classification_rule as upsert_classification_rule_impl,
     upsert_transaction_override as upsert_transaction_override_impl,
 )
 from .transfers import pair_transfers as pair_transfers_impl
@@ -102,6 +107,42 @@ def reconcile_periods(request: dict) -> dict:
     parsed_request = ReconcilePeriodsRequest.model_validate(request)
     balances = load_balances(settings.watch_root)
     return reconcile_periods_impl(database, balances, parsed_request).model_dump()
+
+
+@mcp.tool()
+def apply_classifier(request: dict | None = None) -> dict:
+    """Run the rule-based classifier over unclassified transactions.
+
+    Pass ``{"reclassify_all": true}`` to re-run on all rows (manual overrides
+    are still protected). Pass ``{"account_filter": "<account_id>"}`` to
+    restrict to one account. ``{"dry_run": true}`` shows what would change
+    without writing.
+    """
+    parsed_request = ApplyClassifierRequest.model_validate(request or {})
+    return apply_classifier_impl(database, parsed_request).model_dump()
+
+
+@mcp.tool()
+def upsert_classification_rule(request: dict) -> dict:
+    """Create or update a classification rule.
+
+    Required: ``pattern`` (Python regex, case-insensitive) and at least one
+    output field (``primary_category``, ``subcategory``, ``merchant_normalized``,
+    ``household_role``, or ``lifecycle``).
+
+    Optional: ``id`` (omit to auto-generate), ``account_filter``,
+    ``direction_filter`` (``inflow``/``outflow``/``transfer``), ``confidence``
+    (``high``/``medium``/``low``), ``priority`` (lower = checked first),
+    ``notes``.
+    """
+    parsed_request = UpsertClassificationRuleRequest.model_validate(request)
+    return upsert_classification_rule_impl(database, parsed_request).model_dump()
+
+
+@mcp.tool()
+def list_classification_rules() -> dict:
+    """Return all classification rules ordered by priority then created_at."""
+    return list_classification_rules_impl(database).model_dump()
 
 
 def main() -> None:
