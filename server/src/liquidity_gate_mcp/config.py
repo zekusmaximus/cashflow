@@ -19,6 +19,7 @@ class ServerSettings:
     docs_dir: Path
     tracker_csv_path: Path
     master_index_path: Path
+    project_status_path: Path
     database_path: Path
     schema_path: Path
     watch_root: Path
@@ -75,6 +76,7 @@ def load_settings() -> ServerSettings:
         docs_dir=docs_dir,
         tracker_csv_path=docs_dir / "Spreadsheet_checklist_for_document_tracking.csv",
         master_index_path=docs_dir / "00_CASH_FLOW_MASTER_INDEX.md",
+        project_status_path=docs_dir / "PROJECT_STATUS.md",
         database_path=database_path,
         schema_path=project_root / "server" / "sql" / "schema.sql",
         watch_root=watch_root,

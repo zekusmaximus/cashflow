@@ -1,7 +1,7 @@
 {
   "name": "liquidity-gate",
   "transport": "stdio",
-  "command": "python",
+  "command": "C:\\Users\\Jeff\\Projects\\cashflow\\server\\.venv\\Scripts\\python.exe",
   "args": ["-m", "liquidity_gate_mcp.server"],
   "cwd": "server",
   "env": {
