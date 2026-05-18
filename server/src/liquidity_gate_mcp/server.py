@@ -52,7 +52,10 @@ def tracker_csv() -> str:
 
 @mcp.resource("docs://project-status")
 def project_status() -> str:
-    return settings.project_status_path.read_text(encoding="utf-8")
+    path = settings.project_status_path
+    if path is None:
+        return "(project_status_path not configured)"
+    return path.read_text(encoding="utf-8")
 
 
 @mcp.resource("watch://recent-events")

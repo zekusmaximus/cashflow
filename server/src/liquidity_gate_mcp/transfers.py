@@ -30,6 +30,14 @@ _STRONG_UNTAGGED_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"mobile\s*check\s*dep", re.IGNORECASE),
 )
 
+# Ally HYSA account identifier (matches the parser source_key).
+_ALLY_ACCOUNT_ID = "acct-ally-hysa"
+# Ally inbound-from description pattern. The parser tags these rows as
+# direction='transfer' so they participate in the Beacon<->Ally pairing pass.
+# When no household counterpart exists they are external deposits (bonus
+# checks, ACH inbounds, etc.) and must be reclassified as 'inflow'.
+_ALLY_FROM_PATTERN = re.compile(r"requested\s+transfer\s+from", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class _Row:
@@ -78,11 +86,26 @@ def pair_transfers(
         ]
         non_transfers = [r for r in rows if r.direction != "transfer"]
 
-        pairings, unpaired, ambiguous = _resolve_pairs(
+        pairings, unpaired_raw, ambiguous = _resolve_pairs(
             candidates, request.date_tolerance_days
         )
 
-        if not request.dry_run and pairings:
+        # Reclassify unpaired Ally inbound-from rows as 'inflow'.
+        # They arrive as direction='transfer' so the pairing pass can match
+        # them against a Beacon debit leg. When no counterpart is found they
+        # are external deposits (bonus check, ACH inbound, etc.) and should
+        # appear in inflow totals rather than be silently excluded as transfers.
+        candidates_by_id = {r.id: r for r in candidates}
+        ally_from_rows = [
+            candidates_by_id[u.transaction_id]
+            for u in unpaired_raw
+            if candidates_by_id[u.transaction_id].account_id == _ALLY_ACCOUNT_ID
+            and _ALLY_FROM_PATTERN.search(candidates_by_id[u.transaction_id].description)
+        ]
+        reclassified_ids = {r.id for r in ally_from_rows}
+        unpaired = [u for u in unpaired_raw if u.transaction_id not in reclassified_ids]
+
+        if not request.dry_run and (pairings or ally_from_rows):
             for left, right in pairings:
                 key = uuid4().hex
                 connection.execute(
@@ -94,6 +117,11 @@ def pair_transfers(
                     "UPDATE transactions SET transfer_group_key = ? "
                     "WHERE id = ? AND transfer_group_key IS NULL",
                     (key, right.id),
+                )
+            for row in ally_from_rows:
+                connection.execute(
+                    "UPDATE transactions SET direction = 'inflow' WHERE id = ?",
+                    (row.id,),
                 )
             connection.commit()
         else:
@@ -118,6 +146,7 @@ def pair_transfers(
         ambiguous=ambiguous,
         suspected_untagged=suspected,
         dry_run=request.dry_run,
+        ally_inbound_reclassified=len(ally_from_rows),
     )
 
 

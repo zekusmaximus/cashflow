@@ -4,6 +4,9 @@ import type {
   LeakageCategory,
   LiquidityGate,
   ReconciliationPeriod,
+  Transaction,
+  TransactionDirectionFilter,
+  TransactionPage,
 } from '../features/dashboard/types';
 import { dashboardMock } from '../features/dashboard/mock';
 import { isTauriRuntime } from '../lib/tauri';
@@ -368,4 +371,81 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     leakageCategories,
     reconciliations,
   };
+}
+
+export const TRANSACTION_PAGE_SIZE = 50;
+
+interface TxRow {
+  id: string;
+  occurred_on: string;
+  account_label: string;
+  description_raw: string;
+  merchant_normalized: string | null;
+  primary_category: string;
+  subcategory: string | null;
+  amount: number;
+  direction: string;
+}
+
+export async function getTransactionPage(filter: {
+  page: number;
+  direction: TransactionDirectionFilter;
+}): Promise<TransactionPage> {
+  await bootstrapLocalDatabase();
+  const database = await getDatabase();
+  if (!database) {
+    return { rows: [], total: 0, page: filter.page, pageSize: TRANSACTION_PAGE_SIZE };
+  }
+
+  const offset = filter.page * TRANSACTION_PAGE_SIZE;
+
+  // whereClause is built from a controlled union type — no user-supplied string
+  // ever reaches the query, so conditional string construction is safe here.
+  const whereClause =
+    filter.direction === 'inflow'
+      ? "t.direction = 'inflow'"
+      : filter.direction === 'outflow'
+        ? "t.direction = 'outflow'"
+        : "t.direction != 'transfer'";
+
+  const countRows = await database.select<{ total: number }>(
+    `SELECT COUNT(*) AS total
+       FROM transactions t
+       JOIN accounts a ON a.id = t.account_id
+      WHERE ${whereClause}`,
+  );
+  const total = countRows[0]?.total ?? 0;
+
+  const rows = await database.select<TxRow>(
+    `SELECT
+         t.id,
+         t.occurred_on,
+         (a.institution || ' · ' || a.account_name) AS account_label,
+         t.description_raw,
+         t.merchant_normalized,
+         t.primary_category,
+         t.subcategory,
+         t.amount,
+         t.direction
+       FROM transactions t
+       JOIN accounts a ON a.id = t.account_id
+      WHERE ${whereClause}
+      ORDER BY t.occurred_on DESC, t.id DESC
+      LIMIT $1 OFFSET $2`,
+    [TRANSACTION_PAGE_SIZE, offset],
+  );
+
+  const mapped: Transaction[] = rows.map((r) => ({
+    id: r.id,
+    occurredOn: r.occurred_on,
+    accountLabel: r.account_label,
+    descriptionRaw: r.description_raw,
+    merchantNormalized: r.merchant_normalized,
+    primaryCategory: r.primary_category,
+    subcategory: r.subcategory,
+    amount: r.amount,
+    direction: r.direction as Transaction['direction'],
+  }));
+
+  return { rows: mapped, total, page: filter.page, pageSize: TRANSACTION_PAGE_SIZE };
 }

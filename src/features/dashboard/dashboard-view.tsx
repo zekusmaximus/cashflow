@@ -1,11 +1,15 @@
+import { useState } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { cn, currency, percent } from '../../lib/utils';
+import { useTransactionRegister } from '../../hooks/use-transaction-register';
 import type {
   CashFlowMonth,
   DashboardSnapshot,
   LeakageCategory,
   LiquidityGate,
   ReconciliationPeriod,
+  Transaction,
+  TransactionDirectionFilter,
 } from './types';
 
 // Variance thresholds match master index §6 #2: zero or explained variance
@@ -142,6 +146,8 @@ export function DashboardView({ query }: DashboardViewProps) {
       <ReconciliationSection periods={reconciliations} />
 
       <LeakageSection categories={leakageCategories} />
+
+      <TransactionRegisterSection />
     </div>
   );
 }
@@ -537,5 +543,198 @@ function LeakageCard({ category }: { category: LeakageCategory }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// ── Transaction Register ─────────────────────────────────────────────────────
+
+const DIRECTION_OPTIONS: { value: TransactionDirectionFilter; label: string }[] = [
+  { value: 'outflow', label: 'Outflows' },
+  { value: 'inflow', label: 'Inflows' },
+  { value: 'all', label: 'All' },
+];
+
+function TransactionRegisterSection() {
+  const [page, setPage] = useState(0);
+  const [direction, setDirection] = useState<TransactionDirectionFilter>('outflow');
+
+  const query = useTransactionRegister({ page, direction });
+
+  const handleDirectionChange = (next: TransactionDirectionFilter) => {
+    setPage(0);
+    setDirection(next);
+  };
+
+  const data = query.data;
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+
+  return (
+    <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Transaction register
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            Line-item ledger — most recent first
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Transfers excluded. Unclassified rows show{' '}
+            <span className="rounded bg-ink/[0.06] px-1 py-0.5 font-mono text-[10px] text-ink/70">
+              unclassified
+            </span>{' '}
+            in the Category column.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-ink/[0.05] p-0.5 text-[12px]">
+          {DIRECTION_OPTIONS.map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => handleDirectionChange(value)}
+              className={cn(
+                'rounded-md px-2.5 py-1 transition-colors',
+                direction === value
+                  ? 'bg-white font-medium text-ink shadow-card'
+                  : 'text-ink/60 hover:text-ink',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {query.isLoading ? (
+        <div className="px-5 pb-5 text-[13px] text-ink/50">Loading transactions…</div>
+      ) : query.isError || !data ? (
+        <div className="px-5 pb-5 text-[13px] text-ember">
+          Unable to load transactions.
+        </div>
+      ) : data.rows.length === 0 ? (
+        <div className="px-5 pb-5">
+          <div className="rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
+            No transactions found. Ingest documents via the MCP{' '}
+            <code className="rounded bg-ink/[0.06] px-1 text-[11px] text-ink/75">
+              ingest_documents
+            </code>{' '}
+            tool to populate.
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-[12px]">
+              <thead>
+                <tr className="border-y border-ink/8 bg-paper/60 text-left text-[10px] font-medium uppercase tracking-[0.14em] text-ink/45">
+                  <th className="w-[88px] px-4 py-2">Date</th>
+                  <th className="px-4 py-2">Account</th>
+                  <th className="px-4 py-2">Merchant / Description</th>
+                  <th className="px-4 py-2">Category</th>
+                  <th className="w-[96px] px-4 py-2 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink/[0.05]">
+                {data.rows.map((tx) => (
+                  <TransactionRow key={tx.id} tx={tx} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between border-t border-ink/8 px-5 py-3">
+            <span className="text-[11px] text-ink/45 tnum">
+              {data.total.toLocaleString()} transaction{data.total === 1 ? '' : 's'} ·
+              page {page + 1} of {totalPages}
+            </span>
+            <div className="flex items-center gap-1">
+              <PaginationButton
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                ← Prev
+              </PaginationButton>
+              <PaginationButton
+                disabled={page >= totalPages - 1}
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              >
+                Next →
+              </PaginationButton>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function TransactionRow({ tx }: { tx: Transaction }) {
+  const isOutflow = tx.direction === 'outflow';
+  const isUnclassified = tx.primaryCategory === 'unclassified';
+  const displayLabel = tx.merchantNormalized ?? tx.descriptionRaw;
+  const categoryLabel = tx.subcategory
+    ? `${tx.primaryCategory} / ${tx.subcategory}`
+    : tx.primaryCategory;
+
+  return (
+    <tr className="hover:bg-paper/40 transition-colors">
+      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-[11px] text-ink/55 tnum">
+        {tx.occurredOn}
+      </td>
+      <td className="px-4 py-2.5 text-ink/60">
+        <span className="max-w-[140px] truncate block">{tx.accountLabel}</span>
+      </td>
+      <td className="px-4 py-2.5">
+        <span className="block max-w-[260px] truncate text-ink" title={tx.descriptionRaw}>
+          {displayLabel}
+        </span>
+      </td>
+      <td className="px-4 py-2.5">
+        <span
+          className={cn(
+            'inline-block rounded px-1.5 py-0.5 text-[10px] font-medium',
+            isUnclassified
+              ? 'bg-clay/12 text-clay'
+              : 'bg-ink/[0.05] text-ink/65',
+          )}
+        >
+          {categoryLabel}
+        </span>
+      </td>
+      <td
+        className={cn(
+          'whitespace-nowrap px-4 py-2.5 text-right font-medium tnum',
+          isOutflow ? 'text-ember' : 'text-moss',
+        )}
+      >
+        {isOutflow ? '−' : '+'}{currency(Math.abs(tx.amount))}
+      </td>
+    </tr>
+  );
+}
+
+function PaginationButton({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'rounded-md px-3 py-1 text-[12px] transition-colors',
+        disabled
+          ? 'cursor-not-allowed text-ink/25'
+          : 'text-ink/60 hover:bg-ink/[0.06] hover:text-ink',
+      )}
+    >
+      {children}
+    </button>
   );
 }

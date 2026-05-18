@@ -19,10 +19,10 @@ class ServerSettings:
     docs_dir: Path
     tracker_csv_path: Path
     master_index_path: Path
-    project_status_path: Path
     database_path: Path
     schema_path: Path
     watch_root: Path
+    project_status_path: Path | None = None
 
 
 def default_watch_root() -> Path:

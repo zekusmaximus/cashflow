@@ -714,3 +714,115 @@ def test_diagnostic_weak_classification_for_unknown_description(
     result = pair_transfers(database, PairTransfersRequest())
     misc = next(s for s in result.suspected_untagged if s.transaction_id == "tx-misc")
     assert misc.confidence == "weak"
+
+
+def _fetch_directions(database: DatabaseManager) -> dict[str, str]:
+    connection = database.connect(read_only=True)
+    try:
+        rows = connection.execute(
+            "SELECT id, direction FROM transactions"
+        ).fetchall()
+    finally:
+        connection.close()
+    return {row["id"]: row["direction"] for row in rows}
+
+
+def test_ally_unpaired_inbound_from_reclassified_as_inflow(
+    database: DatabaseManager,
+) -> None:
+    # Ally "Requested transfer from <name> Ally Bank Transfer" rows arrive
+    # tagged direction='transfer' so they can pair with a Beacon debit leg.
+    # When no Beacon counterpart exists (external deposit such as a bonus
+    # check or direct ACH) the row must be reclassified as 'inflow'.
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-bonus",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 1, 5),
+        amount=4500.0,
+        direction="transfer",
+        description="Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+    assert result.ally_inbound_reclassified == 1
+    # Row must not appear in the unpaired list (it was reclassified, not left orphaned).
+    assert result.unpaired == []
+    # DB row must now carry direction='inflow'.
+    assert _fetch_directions(database)["tx-ally-bonus"] == "inflow"
+
+
+def test_ally_inbound_from_dry_run_does_not_write(database: DatabaseManager) -> None:
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-bonus",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 1, 5),
+        amount=4500.0,
+        direction="transfer",
+        description="Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest(dry_run=True))
+
+    assert result.dry_run is True
+    assert result.ally_inbound_reclassified == 1
+    # dry_run must not touch the DB.
+    assert _fetch_directions(database)["tx-ally-bonus"] == "transfer"
+
+
+def test_ally_paired_inbound_from_not_reclassified(database: DatabaseManager) -> None:
+    # An Ally "from" row that successfully pairs with a Beacon debit should
+    # NOT be reclassified — it's a genuine internal transfer.
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-from",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 3, 10),
+        amount=5000.0,
+        direction="transfer",
+        description="Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-beacon-debit",
+        account_id="acct-beacon",
+        occurred_on=date(2026, 3, 10),
+        amount=-5000.0,
+        direction="transfer",
+        description="ALLY BANK TRANSFER",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 1
+    assert result.ally_inbound_reclassified == 0
+    assert result.unpaired == []
+    # Both rows must stay as 'transfer' with a shared group key.
+    directions = _fetch_directions(database)
+    assert directions["tx-ally-from"] == "transfer"
+    assert directions["tx-beacon-debit"] == "transfer"
+    keys = _fetch_keys(database)
+    assert keys["tx-ally-from"] == keys["tx-beacon-debit"] is not None
+
+
+def test_non_ally_unpaired_transfer_stays_unpaired(database: DatabaseManager) -> None:
+    # An "inbound from" description on a NON-Ally account must not be
+    # reclassified — only the Ally HYSA account gets this treatment.
+    _insert_transaction(
+        database,
+        transaction_id="tx-other-inbound",
+        account_id="acct-beacon",
+        occurred_on=date(2026, 2, 1),
+        amount=1200.0,
+        direction="transfer",
+        description="Requested transfer from SOMEONE Ally Bank Transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.ally_inbound_reclassified == 0
+    assert {u.transaction_id for u in result.unpaired} == {"tx-other-inbound"}
+    assert _fetch_directions(database)["tx-other-inbound"] == "transfer"
