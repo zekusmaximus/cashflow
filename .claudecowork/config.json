@@ -3,9 +3,9 @@
   "personaFile": ".claudecowork/agent.md",
   "mcpServerFile": ".claudecowork/mcp-server.json",
   "startupSequence": [
-    "Read docs/00_CASH_FLOW_MASTER_INDEX.md first.",
-    "Read docs/Spreadsheet_checklist_for_document_tracking.csv second.",
-    "Run read_document_metadata before asking for missing documents.",
-    "Keep all data local and preserve transfer-exclusion rules."
+    "Read docs/00_CASH_FLOW_MASTER_INDEX.md first to anchor the spending-first scope and transfer rules.",
+    "Read docs/Spreadsheet_checklist_for_document_tracking.csv second, but treat non-transaction planning rows as optional unless the task explicitly depends on them.",
+    "Inspect available core transaction sources and analyze current spending data before asking for additional documents.",
+    "Ask for missing source accounts only when transaction coverage is incomplete. Keep all data local and preserve transfer-exclusion rules."
   ]
 }

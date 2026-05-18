@@ -1,25 +1,27 @@
-# Master Index — 2026 Household Cash-Flow Reality Dashboard
+# Master Index — 2026 Household Spending Reconstruction
 
-**Last updated:** 2026-05-06  
+**Last updated:** 2026-05-18  
 **Maintained by:** Jeff, with ChatGPT/AI-assisted review  
 **Project folder:** Cash Flow  
-**Purpose:** Single landing page for any new chat session working on the household cash-flow dashboard. Read this file first, then the document tracker spreadsheet.
+**Purpose:** Single landing page for any new chat session working on the household spending reconstruction workspace. Read this file first, then the tracker CSV.
 
 ---
 
 ## Quick Status
 
-This project exists to build a **document-based household cash-flow reconstruction and forward projection** for 2026–2027. Its job is not to replace the capital-efficiency plan. Its job is to answer the practical question the capital-efficiency plan depends on:
+This project exists to build a **local-first, transaction-first household spending reconstruction** for 2026. Its default job is to answer practical monthly and annual spending questions from core account exports, not to block analysis on every document in the broader financial picture.
 
-> Can the household sustain the planned 401(k), HSA, insurance, liquidity, Roth, and taxable-investment decisions without creating lifestyle strain or relying on vague assumptions?
+> Where is money actually going each month, what is recurring versus one-off, and which source accounts still need to be ingested before the picture is trustworthy?
+
+Useful spending analysis should begin once the core transaction sources are present. Payroll, tax, insurance, debt, rental, and capital-planning documents are optional later inputs unless a specific task explicitly requires them.
 
 The first project file is:
 
 | Document | Purpose | Status |
 |---|---|---|
-| `Spreadsheet_checklist_for_document_tracking.xlsx` | Collection tracker for all documents needed to build the dashboard | **Active first-file tracker** |
+| `Spreadsheet_checklist_for_document_tracking.csv` | Intake tracker for core sources, optional enrichments, and deferred planning inputs | **Active intake tracker** |
 
-The current tracker identifies **86 total document/data items** across nine categories:
+The current tracker identifies **86 tracked document/data items** across nine categories:
 
 1. Core Transactions
 2. Income & Payroll
@@ -31,9 +33,9 @@ The current tracker identifies **86 total document/data items** across nine cate
 8. Subscriptions & Apps
 9. Tax Documents
 
-Current tracker status at project launch: **0 / 86 items obtained inside this folder**, pending document uploads and status updates. Some documents already exist in the broader capital-efficiency project and can be copied or re-uploaded here rather than re-created.
+Only a subset of those items is required for baseline spending reconstruction. The rest should be treated as optional enrichments or deferred planning inputs that can be layered in later.
 
-Project architecture: data intake is **manual CSV/PDF upload only** (DL-001) and refresh cadence is **on-demand only** (DL-002). See `2026_Cashflow_Decision_Log.md` for both decisions and for closed classification items.
+Project architecture remains local-file based. Core spending analysis starts with transaction CSVs and can later incorporate supporting PDFs or screenshots when they materially improve classification or verification. See `2026_Cashflow_Decision_Log.md` for architecture decisions and closed classification items.
 
 ---
 
@@ -41,41 +43,39 @@ Project architecture: data intake is **manual CSV/PDF upload only** (DL-001) and
 
 Use this prompt:
 
-> Continuing the 2026 Household Cash-Flow Reality Dashboard. Read `00_CASH_FLOW_MASTER_INDEX.md` first, then `Spreadsheet_checklist_for_document_tracking.xlsx`. Treat uploaded transaction files, paystubs, account statements, bills, and insurance documents as the primary factual record. Build a cash-flow reconstruction and forward projection that can later export a clean `2026_Household_Cashflow_Reality_Appendix.md` for the capital-efficiency plan.
+> Continuing the 2026 Household Spending Reconstruction workspace. Read `00_CASH_FLOW_MASTER_INDEX.md` first, then `Spreadsheet_checklist_for_document_tracking.csv`. Start with the available transaction exports and reconstruct monthly and annual spending. Ask for additional source accounts only when transaction coverage is incomplete. Treat payroll, tax, insurance, and broader planning documents as optional unless the task explicitly depends on them.
 
 If the chat is about a specific task, add one of these:
 
-- “Focus only on document intake and tracker updates.”
+- “Focus only on core transaction source intake and coverage gaps.”
 - “Focus only on Chase and checking categorization.”
-- “Focus only on payroll and net-pay modeling.”
-- “Focus only on fixed obligations and annual bills.”
-- “Focus only on HYSA trajectory and capital-plan feasibility.”
-- “Create or update the importable cash-flow appendix.”
+- “Focus only on monthly spending, category totals, and merchant patterns.”
+- “Focus only on transfer cleanup and double-counting control.”
+- “Focus only on recurring charges and one-time items.”
+- “Use optional planning documents only for a specific follow-up question.”
 
 ---
 
 ## 1. Project Objective
 
-The dashboard should produce a practical household cash-flow control system, not generic budgeting advice.
+The workspace should produce a practical household spending control system, not a full financial-planning dossier.
 
 It should answer:
 
-1. What is the household’s true monthly fixed burn?
-2. What is the household’s true variable lifestyle burn?
-3. Which expenses are recurring, seasonal, one-time, reimbursable, tax-related, or abnormal?
-4. What is normal monthly net income after payroll deductions?
-5. How dependent is the household on bonuses, RSUs, tax refunds, reimbursements, or transfers?
-6. What is the realistic Ally HYSA trajectory?
-7. Is the $80,000 HYSA gate feasible before 2027 Roth re-engagement?
-8. Which spending categories threaten the capital-efficiency plan?
-9. What category caps or sinking funds would preserve lifestyle while preventing cash-flow drift?
-10. What clean conclusion should be imported into `Household_Capital_Efficiency_Review_2026.md`?
+1. What are we actually spending each month?
+2. Which categories and merchants drive the largest outflows?
+3. Which charges are recurring, seasonal, one-time, reimbursable, or abnormal?
+4. Which transfers should be excluded from spending totals?
+5. What changed month over month, and which changes look material?
+6. Which source accounts are still missing and materially limit confidence?
+7. Which spending buckets look unusually high or still need cleanup?
+8. What practical follow-up questions or category controls would improve visibility?
 
 ---
 
 ## 2. Relationship to the Capital-Efficiency Plan
 
-This project is a **supporting operational model** for the capital-efficiency plan.
+This project can support the capital-efficiency plan later, but that is not its default scope.
 
 The capital-efficiency plan answers:
 
@@ -83,15 +83,13 @@ The capital-efficiency plan answers:
 
 This cash-flow project answers:
 
-> Do we actually have the marginal dollars, and where are they going?
+> What are we actually spending, what is recurring versus one-time, and how does that change month to month?
 
-The final output should be a concise markdown appendix:
+The baseline output for this repo should be a clean transaction ledger plus monthly and annual spending summaries that Claude Cowork can discuss directly.
 
-`2026_Household_Cashflow_Reality_Appendix.md`
+If broader planning later needs a concise appendix, that export can be produced as a downstream artifact rather than treated as the baseline product definition.
 
-That appendix should be importable into, or cross-referenced by, `Household_Capital_Efficiency_Review_2026.md`.
-
-The capital-efficiency plan should not become a transaction-level budget file. This project should own the transaction-level work and export only the conclusions needed for planning.
+The capital-efficiency plan should not become a transaction-level budget file. This project should own the transaction-level work and export only the conclusions needed for planning when that later handoff is explicitly requested.
 
 ---
 
@@ -99,17 +97,29 @@ The capital-efficiency plan should not become a transaction-level budget file. T
 
 ### Primary factual record
 
-Use actual documents and exports first:
+Start with the transaction sources that directly reconstruct household cash flow:
 
 - CSV transaction exports
-- bank and credit-card statements
-- payroll stubs
-- loan and mortgage statements
-- insurance declarations and premium schedules
+- bank and credit-card statements when CSV is unavailable or verification is needed
+- P2P exports such as Venmo, PayPal, or Zelle when they are materially used
+
+### Optional enrichment record
+
+Use these when they materially improve classification or context:
+
+- Amazon or Instacart exports
+- subscription screenshots or exports
+- utility or home-service bills
+- other merchant-specific supporting files
+
+### Deferred planning inputs
+
+Use broader planning documents only when the task explicitly requires them:
+
+- payroll stubs and compensation records
+- loan, mortgage, debt, or insurance files
 - rental records
-- HSA records
-- tax records
-- subscription screenshots/exports
+- HSA or tax documents
 
 ### Secondary factual record
 
@@ -141,7 +151,7 @@ Do not re-open any of these items absent a new contradictory document.
 
 The active intake tracker is:
 
-`Spreadsheet_checklist_for_document_tracking.xlsx`
+`Spreadsheet_checklist_for_document_tracking.csv`
 
 It contains these columns:
 
@@ -158,6 +168,12 @@ It contains these columns:
 | Date Added | Upload or acquisition date |
 | Notes | Clarifications, caveats, replacement status |
 
+Treat the tracker as a scope guide rather than a hard gate:
+
+- core transaction sources are required for baseline spending reconstruction
+- optional enrichments improve categorization and context
+- deferred planning inputs should not block useful spending analysis
+
 ### Tracker maintenance rules
 
 - Mark a document obtained only when the file is uploaded to this Cash Flow project or clearly available in the connected folder.
@@ -170,40 +186,44 @@ It contains these columns:
 
 ## 5. Document Intake Priority
 
-### Phase 1 — Minimum viable dashboard
+Useful spending analysis can start before the full tracker is complete. The baseline threshold is core transaction coverage, not document completeness.
 
-These documents are required before any reliable household-wide dashboard can be produced:
+### Tier 1 — Required for spending reconstruction
+
+These sources are enough to begin useful monthly and annual household spending discussions:
 
 | Priority | Document / data source | Why it matters |
 |---:|---|---|
-| 1 | Chase credit-card CSV — all 2026 YTD | Main discretionary and semi-discretionary spending source |
-| 2 | Beacon / joint checking CSV — all 2026 YTD | Mortgage, card payments, Jeff pay, transfers, checks |
-| 3 | Ashley separate checking CSV/statements — all 2026 YTD | Closes the largest missing source of card payments and household funding |
-| 4 | Ally HYSA CSV/statements — all 2026 YTD | HYSA build, transfers, interest, liquidity gate |
-| 5 | Jeff 2026 paystubs, including bonuses | Normal net pay and 401(k)/tax impact |
-| 6 | Ashley 2026 paystubs, including bonus/RSU stubs | Normal net pay, 401(k), HSA, RSU withholding, benefit deductions |
-| 7 | Current 401(k) and HSA election confirmations | Forward cash-flow modeling |
-| 8 | Current mortgage, HELOC, rental mortgage, and car-loan statements | Fixed-debt baseline |
-| 9 | Insurance premium schedules: home, auto, umbrella, life, DI/LTD if available | Annual and monthly fixed-cost normalization |
-| 10 | Rental lease, rent history, HOA/condo dues, repairs, and insurance | True rental cash flow |
+| 1 | Chase credit-card CSVs | Main discretionary and semi-discretionary spending source |
+| 2 | Beacon / joint checking CSVs | Bills, payroll deposits, card payments, transfers, and checks |
+| 3 | Ashley separate checking CSV/statements, if active | Closes any household funding or spending that bypasses joint checking |
+| 4 | Ally HYSA CSV/statements, when relevant | Distinguishes savings transfers and liquidity moves from spending |
+| 5 | Venmo / PayPal / Zelle / Cash App history, if material | Captures household spending or reimbursements that bypass the core bank feeds |
 
-### Phase 2 — Better categorization and leakage detection
+Once the relevant Tier 1 sources are present, Claude Cowork should be able to have useful monthly and annual spending discussions even if later tiers are still missing.
 
-Upload after Phase 1 or as available:
+### Tier 2 — Optional enrichment for better categorization
+
+Upload after Tier 1 or as available:
 
 - Amazon order history export
 - Instacart / grocery delivery history
-- Venmo / PayPal / Zelle history
 - Apple / Google / Amazon subscription screenshots
 - streaming and software subscription lists
 - pet grooming/daycare/boarding invoices
 - vet bills and insurance reimbursement history
 - utilities and home-service bills
 
-### Phase 3 — Tax and planning precision
+### Tier 3 — Deferred broader planning inputs
 
-Upload for 2027 projection and capital-plan handoff:
+Use these only when the task explicitly shifts from spending reconstruction into broader planning:
 
+- Jeff paystubs, bonuses, and payroll detail
+- Ashley paystubs, bonus records, and RSU stubs
+- 401(k) and HSA election confirmations
+- mortgage, HELOC, rental mortgage, and car-loan statements
+- insurance premium schedules and policy details
+- rental lease, rent history, HOA/condo dues, repairs, and insurance
 - 2025 joint tax return
 - 2026 tax projection from Cherubino, if prepared
 - 2026 estimated tax payment receipts, if any
@@ -215,7 +235,9 @@ Upload for 2027 projection and capital-plan handoff:
 
 ## 6. Dashboard Structure
 
-The finished dashboard should include these sections or spreadsheet tabs:
+The baseline dashboard should start with transaction-focused sections such as source coverage, transaction register, monthly spending, variable lifestyle spend, transfer exclusions, and recurring-charge review. Broader planning views can remain available later as optional layers.
+
+The finished dashboard can include these sections or spreadsheet tabs:
 
 1. **Data Inventory** — documents received, missing, date range, status
 2. **Reconciliation** — for each account: opening balance + period inflows − period outflows = computed ending balance, compared against statement-reported ending balance. Variance must be zero (or explicitly explained) before any downstream tab is trusted. Covers Chase, Beacon, Ashley checking, Ally HYSA, Fidelity HSA, taxable brokerage, Venmo/PayPal/Zelle, and any other transactional account. Required inputs: 12/31/2025 closing balance per account and the period-end statement balance per account.
@@ -366,7 +388,7 @@ Use sortable, descriptive names:
 ### Master and tracker files
 
 - `00_CASH_FLOW_MASTER_INDEX.md` — this file; project landing page
-- `Spreadsheet_checklist_for_document_tracking.xlsx` — active intake tracker
+- `Spreadsheet_checklist_for_document_tracking.csv` — active intake tracker
 - `2026_Cashflow_Decision_Log.md` — architecture decisions and closed classification items (immutable, append-only)
 - `2026_Household_Cashflow_Reality_Appendix.md` — final exportable conclusion (created later)
 
@@ -455,7 +477,7 @@ Separate:
 - one-time abnormal items
 - event income
 
-### Step 4 — Build forward projection
+### Step 4 — Optional later: build forward projection
 
 Project through 12/31/2027:
 
@@ -506,7 +528,7 @@ Use this format unless a narrower task is requested:
 ## 18. Immediate Next Steps
 
 1. Put this file in the Cash Flow folder as `00_CASH_FLOW_MASTER_INDEX.md`.
-2. Keep `Spreadsheet_checklist_for_document_tracking.xlsx` as the active intake tracker.
-3. Upload Phase 1 documents, starting with Ashley checking, Chase, Beacon, Ally, and current paystubs.
-4. After the first complete upload pass, create the first dashboard reconstruction.
-5. Once the dashboard is reliable, export `2026_Household_Cashflow_Reality_Appendix.md` for the capital-efficiency plan.
+2. Keep `Spreadsheet_checklist_for_document_tracking.csv` as the active intake tracker.
+3. Upload Tier 1 transaction sources first, starting with Chase, Beacon, Ashley checking if active, Ally when relevant, and materially used P2P exports.
+4. After the first core-source upload pass, create the first spending reconstruction.
+5. Only after the spending reconstruction is reliable should broader planning inputs or an export appendix be considered.

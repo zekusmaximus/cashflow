@@ -34,33 +34,37 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
   if (query.isError || !query.data) {
     return (
       <Card className="text-sm text-ember">
-        Unable to load the intake checklist. Verify that the tracker CSV exists in the docs folder.
+        Unable to load source intake. Verify that the tracker CSV exists in the docs folder.
       </Card>
     );
   }
 
   const { items, summary, watchRoot } = query.data;
   const transactionCounts = transactionCountsQuery.data ?? new Map<string, number>();
-  const essentialMissing = items.filter(
-    (item) => !item.obtained && item.priority.includes('Essential'),
+  const coreItems = items.filter((item) => item.priority.includes('Essential'));
+  const coreReady = coreItems.filter((item) => item.obtained).length;
+  const coreOpen = coreItems.length - coreReady;
+  const additionalContextOpen = items.filter(
+    (item) => !item.obtained && !item.priority.includes('Essential'),
   ).length;
-  const obtainedPercent =
-    summary.totalItems === 0
+  const coreReadyPercent =
+    coreItems.length === 0
       ? 0
-      : Math.round((summary.obtainedCount / summary.totalItems) * 100);
+      : Math.round((coreReady / coreItems.length) * 100);
 
   return (
     <div>
       <div className="mb-5 flex items-end justify-between gap-4">
         <div className="min-w-0">
           <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
-            Phase 1 · Intake
+            Phase 1 · Sources
           </div>
           <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink">
-            Document checklist
+            Financial sources
           </h1>
           <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-ink/60">
-            Driven by the tracker CSV and auto-matched against your watch folder.
+            Start with core transaction exports. Optional enrichment and deferred planning
+            files can come later.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -69,7 +73,7 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
             className="inline-flex items-center gap-1.5 rounded-full border border-ink/15 bg-white px-3 py-1.5 text-[12px] font-medium text-ink/75 hover:border-ink/35"
           >
             <Plus className="h-3.5 w-3.5" />
-            Add item
+            Add source
           </button>
           <button
             type="button"
@@ -82,22 +86,27 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
       </div>
 
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <MetricTile icon={Search} label="Tracked" value={summary.totalItems} />
+        <MetricTile icon={Search} label="Core sources" value={coreItems.length} caption="spending baseline" />
         <MetricTile
           icon={CheckCircle2}
-          label="Obtained"
-          value={summary.obtainedCount}
+          label="Core ready"
+          value={coreReady}
           tone="moss"
-          caption={`${obtainedPercent}%`}
+          caption={`${coreReadyPercent}%`}
         />
         <MetricTile
           icon={AlertTriangle}
-          label="Missing"
-          value={summary.missingCount}
-          tone="clay"
-          caption={`${essentialMissing} essential`}
+          label="Core open"
+          value={coreOpen}
+          tone={coreOpen > 0 ? 'clay' : 'moss'}
+          caption="needed for baseline"
         />
-        <MetricTile icon={LayoutGrid} label="Categories" value={summary.categories.length} />
+        <MetricTile
+          icon={LayoutGrid}
+          label="Later context"
+          value={additionalContextOpen}
+          caption="optional / deferred"
+        />
       </div>
 
       <WatchRootStrip status={watchRoot} />
@@ -205,9 +214,9 @@ function CategorySidebar({ categories }: { categories: ChecklistCategorySummary[
       >
         <div>
           <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
-            Status by
+            Coverage by
           </div>
-          <div className="text-[14px] font-semibold text-ink">Category</div>
+          <div className="text-[14px] font-semibold text-ink">Source group</div>
         </div>
       </div>
       <div className="space-y-3.5 px-4 py-4">
@@ -265,10 +274,10 @@ function ChecklistTable({ items, transactionCounts }: ChecklistTableProps) {
           >
             <tr className="text-[10px] uppercase tracking-[0.16em] text-ink/45">
               <th className="px-4 py-2.5 font-medium">Status</th>
-              <th className="px-3 py-2.5 font-medium">Document</th>
+              <th className="px-3 py-2.5 font-medium">Source</th>
               <th className="px-3 py-2.5 font-medium">Category</th>
               <th className="px-3 py-2.5 font-medium">Priority</th>
-              <th className="px-4 py-2.5 font-medium">Why needed</th>
+              <th className="px-4 py-2.5 font-medium">Why it helps</th>
             </tr>
           </thead>
           <tbody>
@@ -294,6 +303,7 @@ function ChecklistRow({
   transactionCounts: Map<string, number>;
 }) {
   const isEssential = item.priority.includes('Essential');
+  const isDeferred = item.priority.includes('Deferred');
   return (
     <tr
       className="align-top hover:bg-paper/60"
@@ -304,7 +314,7 @@ function ChecklistRow({
           <>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-moss/12 px-2 py-0.5 text-[11px] font-medium text-moss">
               <Check className="h-3 w-3" />
-              Got it
+              Available
             </span>
             {item.obtainedSource === 'filesystem' ? (
               <div className="mt-1 flex items-center gap-1 text-[10px] uppercase tracking-[0.14em] text-moss/80">
@@ -314,9 +324,21 @@ function ChecklistRow({
             ) : null}
           </>
         ) : (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-clay/12 px-2 py-0.5 text-[11px] font-medium text-clay">
-            <span className="h-1.5 w-1.5 rounded-full bg-clay" />
-            Missing
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium',
+              isEssential
+                ? 'bg-clay/12 text-clay'
+                : 'bg-ink/[0.06] text-ink/55',
+            )}
+          >
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full',
+                isEssential ? 'bg-clay' : 'bg-ink/35',
+              )}
+            />
+            Open
           </span>
         )}
       </td>
@@ -352,8 +374,10 @@ function ChecklistRow({
           className={cn(
             'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.06em]',
             isEssential
-              ? 'border-ember/30 bg-ember/8 text-ember'
-              : 'border-ink/15 bg-ink/[0.04] text-ink/65',
+              ? 'border-moss/30 bg-moss/10 text-moss'
+              : isDeferred
+                ? 'border-ink/10 bg-paper text-ink/45'
+                : 'border-ink/15 bg-ink/[0.04] text-ink/65',
           )}
         >
           {item.priority}
@@ -372,7 +396,7 @@ function ChecklistRow({
 function LoadingState() {
   return (
     <div className="rounded-xl border border-ink/8 bg-white p-6 text-sm text-ink/70 shadow-card">
-      Building the intake board from the tracker CSV.
+      Loading source coverage from the tracker CSV.
     </div>
   );
 }
