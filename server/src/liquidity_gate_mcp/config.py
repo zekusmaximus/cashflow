@@ -27,10 +27,10 @@ class ServerSettings:
 def default_watch_root() -> Path:
     """Default location for real financial documents.
 
-    Defaults to ``~/Documents/CashFlow`` so private statements never live
+    Defaults to ``~/Documents/Cashflow`` so private statements never live
     inside the repository. Override with ``LIQUIDITY_GATE_WATCH_ROOT``.
     """
-    return Path.home() / "Documents" / "CashFlow"
+    return Path.home() / "Documents" / "Cashflow"
 
 
 def default_database_path() -> Path:

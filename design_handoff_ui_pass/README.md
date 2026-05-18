@@ -401,7 +401,7 @@ You may use the `Card` primitive where it fits, but most surfaces in this pass a
 ## After implementing
 
 1. Run `npm run dev` and verify both views render at 1280px, 1024px, and 768px without horizontal overflow.
-2. Resize the watch-root path to something long like `/Users/jeff/Library/Application Support/CashFlow/intake/2026-archive/long-subfolder/` and confirm it truncates instead of pushing the file-count off-screen.
+2. Resize the watch-root path to something long like `/Users/jeff/Library/Application Support/Cashflow/intake/2026-archive/long-subfolder/` and confirm it truncates instead of pushing the file-count off-screen.
 3. Run `npm test` — none of the matcher / checklist tests should break (no logic changed).
 4. Open the Tauri desktop build (`npm run tauri dev`) and confirm the watch-root invocation still works.
 

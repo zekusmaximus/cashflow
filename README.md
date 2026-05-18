@@ -85,7 +85,7 @@ export LIQUIDITY_GATE_WATCH_ROOT="$HOME/Documents/Cashflow"
 
 Add the export to `~/.bashrc` or `~/.zshrc` to persist across sessions.
 
-If you skip this step, both the desktop app and the MCP server fall back to `~/Documents/CashFlow`.
+If you skip this step, both the desktop app and the MCP server fall back to `~/Documents/Cashflow`.
 
 ### 4. Create the watch root folder
 

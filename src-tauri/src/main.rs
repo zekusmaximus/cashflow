@@ -41,7 +41,7 @@ fn default_watch_root() -> PathBuf {
         .or_else(|_| std::env::var("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    home.join("Documents").join("CashFlow")
+    home.join("Documents").join("Cashflow")
 }
 
 fn walk_root(dir: &Path, base: &Path, out: &mut Vec<CandidateFile>) {
