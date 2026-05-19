@@ -18,6 +18,17 @@ export interface LeakageCategory {
   cap: number;
 }
 
+export interface SubscriptionAuditEntry {
+  merchant: string;
+  subcategory: string | null;
+  householdRole: string | null;
+  chargeCount: number;
+  monthCount: number;
+  avgAmount: number;
+  monthlyBurn: number;
+  lastChargedOn: string;
+}
+
 export interface ReconciliationPeriod {
   accountId: string;
   accountLabel: string;
@@ -37,6 +48,7 @@ export interface DashboardSnapshot {
   gates: LiquidityGate[];
   leakageCategories: LeakageCategory[];
   reconciliations: ReconciliationPeriod[];
+  subscriptionAudit: SubscriptionAuditEntry[];
 }
 
 export interface Transaction {

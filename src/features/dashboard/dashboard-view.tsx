@@ -15,6 +15,7 @@ import type {
   LeakageCategory,
   LiquidityGate,
   ReconciliationPeriod,
+  SubscriptionAuditEntry,
   Transaction,
   TransactionDirectionFilter,
   TransactionPage,
@@ -66,7 +67,8 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
     );
   }
 
-  const { months, gates, leakageCategories, reconciliations } = query.data;
+  const { months, gates, leakageCategories, reconciliations, subscriptionAudit } =
+    query.data;
   const totalInflow = months.reduce((total, m) => total + m.inflow, 0);
   const totalOutflow = months.reduce((total, m) => total + m.outflow, 0);
   const netYtd = totalInflow - totalOutflow;
@@ -156,6 +158,8 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
       <ReconciliationSection periods={reconciliations} />
 
       <LeakageSection categories={leakageCategories} />
+
+      <SubscriptionAuditSection entries={subscriptionAudit} />
 
       <TransactionRegisterSection />
     </div>
@@ -824,6 +828,137 @@ function LeakageCard({ category }: { category: LeakageCategory }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// ── Subscription audit ───────────────────────────────────────────────────────
+
+const HOUSEHOLD_ROLE_STYLES: Record<string, string> = {
+  jeff: 'bg-tide/12 text-tide',
+  ashley: 'bg-clay/14 text-clay',
+  joint: 'bg-moss/12 text-moss',
+};
+
+function subscriptionTotalBurn(entries: SubscriptionAuditEntry[]): number {
+  return entries.reduce((total, entry) => total + entry.monthlyBurn, 0);
+}
+
+function SubscriptionAuditSection({ entries }: { entries: SubscriptionAuditEntry[] }) {
+  const totalBurn = subscriptionTotalBurn(entries);
+  return (
+    <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Subscriptions / app audit
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            Recurring software & streaming charges
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Sourced from classified <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">fixed_obligation</code> outflows with subcategory{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">subscriptions_apps</code> or{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">streaming</code>. Ordered by monthly burn; reclassify in the register to remove a row.
+          </p>
+        </div>
+        {entries.length > 0 ? (
+          <div className="shrink-0 rounded-lg bg-ink/[0.04] px-3 py-1.5 text-right">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+              Monthly burn
+            </div>
+            <div className="text-[14px] font-semibold tnum text-ink">
+              {currency(totalBurn)}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {entries.length === 0 ? (
+        <div className="px-5 pb-5">
+          <div className="rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
+            No recurring software or streaming charges classified yet. Build
+            classifier rules with subcategory{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              subscriptions_apps
+            </code>{' '}
+            or{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              streaming
+            </code>{' '}
+            via the{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              upsert_classification_rule
+            </code>{' '}
+            MCP tool.
+          </div>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-[12px]">
+            <thead>
+              <tr className="border-y border-ink/8 bg-paper/60 text-left text-[10px] font-medium uppercase tracking-[0.14em] text-ink/45">
+                <th className="px-4 py-2">Merchant</th>
+                <th className="px-4 py-2">Owner</th>
+                <th className="px-4 py-2 text-right">Charges</th>
+                <th className="px-4 py-2 text-right">Months</th>
+                <th className="px-4 py-2 text-right">Avg / charge</th>
+                <th className="px-4 py-2 text-right">Monthly burn</th>
+                <th className="w-[100px] px-4 py-2">Last charged</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink/[0.05]">
+              {entries.map((entry) => (
+                <SubscriptionAuditRow
+                  key={`${entry.merchant}|${entry.subcategory ?? ''}|${entry.householdRole ?? ''}`}
+                  entry={entry}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SubscriptionAuditRow({ entry }: { entry: SubscriptionAuditEntry }) {
+  const role = entry.householdRole?.toLowerCase() ?? null;
+  const roleClass = role ? HOUSEHOLD_ROLE_STYLES[role] ?? 'bg-ink/[0.05] text-ink/60' : 'bg-ink/[0.05] text-ink/45';
+  return (
+    <tr className="hover:bg-paper/40 transition-colors">
+      <td className="px-4 py-2.5 text-ink">
+        <div className="max-w-[260px] truncate font-medium">{entry.merchant}</div>
+        {entry.subcategory ? (
+          <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink/45">
+            {entry.subcategory}
+          </div>
+        ) : null}
+      </td>
+      <td className="px-4 py-2.5">
+        <span
+          className={cn(
+            'inline-block rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em]',
+            roleClass,
+          )}
+        >
+          {role ?? 'unassigned'}
+        </span>
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right tnum text-ink/65">
+        {entry.chargeCount}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right tnum text-ink/65">
+        {entry.monthCount}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right font-medium tnum text-ink">
+        {currency(entry.avgAmount)}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tnum text-ink">
+        {currency(entry.monthlyBurn)}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-[11px] tnum text-ink/55">
+        {entry.lastChargedOn}
+      </td>
+    </tr>
   );
 }
 

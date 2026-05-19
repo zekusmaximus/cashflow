@@ -5,6 +5,7 @@ import type {
   LeakageCategory,
   LiquidityGate,
   ReconciliationPeriod,
+  SubscriptionAuditEntry,
   Transaction,
   TransactionDirectionFilter,
   TransactionPage,
@@ -239,6 +240,16 @@ interface LeakageRow {
   cap: number | null;
 }
 
+interface SubscriptionRow {
+  merchant: string | null;
+  subcategory: string | null;
+  householdRole: string | null;
+  chargeCount: number;
+  monthCount: number;
+  totalAmount: number;
+  lastChargedOn: string;
+}
+
 interface ReconciliationRow {
   accountId: string;
   accountLabel: string;
@@ -322,6 +333,47 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
     cap: row.cap ?? 0,
   }));
 
+  // Recurring software / streaming subscriptions, aggregated per merchant.
+  // The filter intentionally tracks subcategories produced by the classifier
+  // rule set (subscriptions_apps + streaming) rather than the broader
+  // fixed_obligation bucket — utilities, insurance, and loan payments are
+  // reviewed elsewhere. monthly_burn averages the total spend per merchant
+  // across the distinct months the charge appears, which mirrors how the
+  // analyst sizes "keep / cancel / review" decisions.
+  const subscriptionRows = await database.select<SubscriptionRow>(
+    `SELECT
+         COALESCE(NULLIF(merchant_normalized, ''), description_raw) AS merchant,
+         subcategory,
+         NULLIF(household_role, '')                                 AS householdRole,
+         COUNT(*)                                                   AS chargeCount,
+         COUNT(DISTINCT substr(occurred_on, 1, 7))                  AS monthCount,
+         ROUND(SUM(ABS(amount)), 2)                                 AS totalAmount,
+         MAX(occurred_on)                                           AS lastChargedOn
+       FROM transactions
+      WHERE direction = 'outflow'
+        AND primary_category = 'fixed_obligation'
+        AND subcategory IN ('subscriptions_apps', 'streaming')
+      GROUP BY merchant, subcategory, householdRole
+      ORDER BY (totalAmount / NULLIF(monthCount, 0)) DESC
+      LIMIT 24`,
+  );
+
+  const subscriptionAudit: SubscriptionAuditEntry[] = subscriptionRows.map((row) => {
+    const chargeCount = row.chargeCount ?? 0;
+    const monthCount = row.monthCount ?? 0;
+    const totalAmount = row.totalAmount ?? 0;
+    return {
+      merchant: row.merchant ?? '(unknown)',
+      subcategory: row.subcategory,
+      householdRole: row.householdRole,
+      chargeCount,
+      monthCount,
+      avgAmount: chargeCount > 0 ? totalAmount / chargeCount : 0,
+      monthlyBurn: monthCount > 0 ? totalAmount / monthCount : 0,
+      lastChargedOn: row.lastChargedOn,
+    };
+  });
+
   // All reconciliation periods for every account, sorted so the most recent
   // period per account is encountered first. The UI groups by account_id and
   // exposes prior periods via the per-card history drill-down.
@@ -358,12 +410,14 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
 
   // If there is no real data at all, return the explicit demo fallback so the
   // empty dashboard still communicates expected composition. Once any real
-  // data lands (months/gates/leakage/reconciliations), use only what's in the DB.
+  // data lands (months/gates/leakage/reconciliations/subscriptions), use only
+  // what's in the DB.
   const hasRealData =
     months.length > 0 ||
     gates.length > 0 ||
     leakageCategories.length > 0 ||
-    reconciliations.length > 0;
+    reconciliations.length > 0 ||
+    subscriptionAudit.length > 0;
   if (!hasRealData) {
     return { ...dashboardMock };
   }
@@ -373,6 +427,7 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
     gates,
     leakageCategories,
     reconciliations,
+    subscriptionAudit,
   };
 }
 
