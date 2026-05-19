@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-18 (night, post-ally-fix-and-transaction-register)
+**Last updated:** 2026-05-19 (UI interactivity planning — inline edits + file upload)
 
 ## Snapshot
 
@@ -71,9 +71,12 @@ after the pairing pass. The three affected rows ($4,500 on 2026-01-05,
 $5,080 on 2026-04-08, $1,000 on 2026-05-08) will be corrected on the next
 `pair_transfers` call.
 
-**Next single task**: Transaction Register classification edit UI — inline
-category/merchant overrides calling `upsert_transaction_override` (roadmap §6,
-read-only register is now live).
+**Next tasks (UI interactivity sprint)**: Two self-contained frontend features that together make the app the primary day-to-day maintenance surface, reducing how often a Claude Cowork session is needed for routine cleanup:
+
+1. **Transaction Register inline edit** — category/merchant overrides directly in the register table, calling the already-implemented `upsertTransactionOverride()` in `src/services/sqlite.ts`. Because the Tauri app and the MCP server share one SQLite DB, any override saved here is immediately visible to Cowork without re-syncing.
+2. **"Add source" file upload** — wire the existing shell button on the Source Intake view to a Tauri file-picker dialog; copy the selected CSV or PDF into the watch root (`C:\Users\Jeff\Documents\Cashflow`); trigger a checklist rescan so the intake view reflects the new file. Requires `@tauri-apps/plugin-dialog` + `@tauri-apps/plugin-fs` (both already available in Tauri v2) plus an invoke call to refresh the checklist query.
+
+Workflow intent: use the UI for quick one-off fixes and file drops; open Cowork only when you need pattern-based classification rules, transfer pairing, or deeper spending analysis. See roadmap §6 for full task breakdown.
 
 ## Architecture (one-screen reminder)
 
@@ -254,7 +257,19 @@ normal use of the repo for transaction-based spending analysis.
 ### 6. Dashboard build-out
 - [ ] 14 sections per master index §6 (currently 5 cards: cash flow, HYSA gate, leakage, reconciliation, transaction register)
 - [x] Transaction Register — read-only paginated ledger with direction filter and category display
-- [ ] Transaction Register — inline classification edit UI (calls `upsert_transaction_override`)
+- [ ] **Transaction Register — inline classification edit UI** *(next task)*
+  - Editable `primary_category` and `merchant_normalized` fields per row (click-to-edit or pencil icon)
+  - On save, calls `upsertTransactionOverride()` already implemented in `src/services/sqlite.ts`
+  - Optimistic UI update; React Query invalidates `transaction-register` key on success
+  - Row badge changes from amber "unclassified" to the saved category immediately
+  - No new backend code needed — the DB function and override schema are already in place
+- [ ] **"Add source" file upload button** *(next task, parallel to above)*
+  - Replace the no-op shell button in `document-intake-view.tsx` with a real handler
+  - Use `@tauri-apps/plugin-dialog` `open()` to show a file picker filtered to `.csv` and `.pdf`
+  - Use `@tauri-apps/plugin-fs` `copyFile()` to place the file in the watch root
+  - Invalidate the `document-checklist` React Query key so the intake view rescans immediately
+  - Optionally invoke `read_document_metadata` MCP tool afterward to persist the match in the DB
+  - Both plugins are already available; only frontend wiring is required
 - [ ] HYSA trajectory chart
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
 - [ ] Subscription audit / leakage card driven from real data
