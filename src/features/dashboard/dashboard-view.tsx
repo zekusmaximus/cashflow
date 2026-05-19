@@ -4,6 +4,7 @@ import { cn, currency, percent } from '../../lib/utils';
 import { useTransactionRegister } from '../../hooks/use-transaction-register';
 import type {
   CashFlowMonth,
+  DashboardRange,
   DashboardSnapshot,
   LeakageCategory,
   LiquidityGate,
@@ -37,9 +38,11 @@ function currencyCents(value: number): string {
 
 interface DashboardViewProps {
   query: UseQueryResult<DashboardSnapshot, Error>;
+  activeRange: DashboardRange;
+  onRangeChange: (range: DashboardRange) => void;
 }
 
-export function DashboardView({ query }: DashboardViewProps) {
+export function DashboardView({ query, activeRange, onRangeChange }: DashboardViewProps) {
   if (query.isLoading) {
     return (
       <div className="rounded-xl border border-ink/8 bg-white p-6 text-sm text-ink/70 shadow-card">
@@ -87,9 +90,9 @@ export function DashboardView({ query }: DashboardViewProps) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1 rounded-lg bg-ink/[0.05] p-0.5 text-[12px]">
-          <RangeButton active>YTD</RangeButton>
-          <RangeButton>12 mo</RangeButton>
-          <RangeButton>All</RangeButton>
+          <RangeButton active={activeRange === 'ytd'} onClick={() => onRangeChange('ytd')}>YTD</RangeButton>
+          <RangeButton active={activeRange === '12mo'} onClick={() => onRangeChange('12mo')}>12 mo</RangeButton>
+          <RangeButton active={activeRange === 'all'} onClick={() => onRangeChange('all')}>All</RangeButton>
         </div>
       </div>
 
@@ -288,13 +291,16 @@ function sourceLabel(source: string): string {
 function RangeButton({
   children,
   active = false,
+  onClick,
 }: {
   children: React.ReactNode;
   active?: boolean;
+  onClick?: () => void;
 }) {
   return (
     <button
       type="button"
+      onClick={onClick}
       className={cn(
         'rounded-md px-2.5 py-1 transition-colors',
         active ? 'bg-white font-medium text-ink shadow-card' : 'text-ink/60 hover:text-ink',

@@ -42,11 +42,14 @@ export interface DashboardSnapshot {
 export interface Transaction {
   id: string;
   occurredOn: string;
+  accountId: string;
   accountLabel: string;
   descriptionRaw: string;
   merchantNormalized: string | null;
   primaryCategory: string;
   subcategory: string | null;
+  householdRole: string;
+  lifecycle: string;
   amount: number;
   direction: 'inflow' | 'outflow' | 'transfer';
 }
@@ -59,3 +62,5 @@ export interface TransactionPage {
 }
 
 export type TransactionDirectionFilter = 'all' | 'inflow' | 'outflow';
+
+export type DashboardRange = 'ytd' | '12mo' | 'all';

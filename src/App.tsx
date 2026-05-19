@@ -5,11 +5,13 @@ import { DocumentIntakeView } from './features/document-intake/document-intake-v
 import { useDashboard } from './hooks/use-dashboard';
 import { useDocumentChecklist } from './hooks/use-document-checklist';
 import { bootstrapLocalDatabase } from './services/sqlite';
+import type { DashboardRange } from './features/dashboard/types';
 
 export default function App() {
   const [view, setView] = useState<AppView>('intake');
+  const [dashboardRange, setDashboardRange] = useState<DashboardRange>('ytd');
   const checklistQuery = useDocumentChecklist();
-  const dashboardQuery = useDashboard();
+  const dashboardQuery = useDashboard(dashboardRange);
   const checklistItems = checklistQuery.data?.items ?? [];
   const coreSources = checklistItems.filter((item) => item.priority.includes('Essential')).length;
   const coreReady = checklistItems.filter(
@@ -36,7 +38,11 @@ export default function App() {
       {view === 'intake' ? (
         <DocumentIntakeView query={checklistQuery} />
       ) : (
-        <DashboardView query={dashboardQuery} />
+        <DashboardView
+          query={dashboardQuery}
+          activeRange={dashboardRange}
+          onRangeChange={setDashboardRange}
+        />
       )}
     </AppShell>
   );
