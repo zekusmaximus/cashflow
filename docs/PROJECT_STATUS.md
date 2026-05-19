@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (variance explanation inline edit + reconciliation history drill-down landed)
+**Last updated:** 2026-05-19 (variance explanation inline edit + reconciliation history drill-down + subscriptions audit card landed)
 
 ## Snapshot
 
@@ -102,13 +102,14 @@ watch-root path resolution in one place and avoids broadening the
 `plugin-fs` scope.
 
 **Next focus:** remaining roadmap §6 dashboard cards (HYSA trajectory
-chart, Capital-Plan Feasibility badge, real-data Subscription audit).
-Manual `variance_explanation` entry UI and reconciliation history
-drill-down both landed 2026-05-19 — reconciliation cards now expose
-click-to-edit explanations and a "Show N earlier periods" toggle that
-reveals every prior period for the same account (sorted period_end
-DESC), rendered as compact rows with their own variance badge and
-explanation.
+chart, Capital-Plan Feasibility badge). Manual `variance_explanation`
+entry UI, reconciliation history drill-down, and the real-data
+Subscriptions / App Audit card all landed 2026-05-19. The subscriptions
+card is master-index §6 #11, kept distinct from the existing leakage
+card (§6 #6) — the SQL query targets classified outflows with
+subcategory `subscriptions_apps` or `streaming`, aggregates per
+merchant + owner, and reports charge count, distinct months, average
+charge, monthly burn, and last-charged date.
 
 ## Architecture (one-screen reminder)
 
@@ -218,6 +219,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] "Add source" file upload: Tauri file picker (csv/pdf) → `copy_to_watch_root` command → `document-checklist` invalidation; "Rescan folder" wired to the same invalidation; button disabled outside the Tauri runtime
 - [x] Reconciliation card inline variance-explanation edit: click the explanation (or "+ Add variance explanation" affordance) to open a textarea — Esc cancels, ⌘/Ctrl+Enter saves, blur saves; optimistic React Query update with rollback-on-error; persisted via `updateVarianceExplanation()` keyed by `(account_id, period_start, period_end)`, the same triple `reconcile_periods` preserves across reruns
 - [x] Reconciliation history drill-down: snapshot SQL now returns every period (sorted `period_end DESC` within each account); each card shows the latest period inline plus a "Show N earlier periods" toggle that reveals compact rows for every prior period with its own variance badge and explanation
+- [x] Subscriptions / App Audit card (master index §6 #11) driven from real classifier output: groups outflows whose `primary_category = 'fixed_obligation'` and `subcategory IN ('subscriptions_apps','streaming')` by merchant + owner, reports charge count, distinct months, average charge, monthly burn, last-charged date; ordered by monthly burn DESC with an aggregate burn total in the header
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -307,7 +309,12 @@ normal use of the repo for transaction-based spending analysis.
   - MCP `read_document_metadata` invocation deferred — Tauri frontend has no path to MCP tools; the existing 5s rescan + Cowork ingestion flow is sufficient
 - [ ] HYSA trajectory chart
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
-- [ ] Subscription audit / leakage card driven from real data
+- [x] **Subscriptions / App Audit card driven from real data** (2026-05-19)
+  - New section (master index §6 #11), distinct from the existing leakage card (§6 #6)
+  - SQL aggregates outflows whose `primary_category = 'fixed_obligation'` and `subcategory IN ('subscriptions_apps','streaming')`, grouped by `merchant_normalized` + `subcategory` + `household_role`
+  - Reports charge count, distinct months, avg charge, monthly burn (= total / distinct months), and last-charged date; rows ordered by monthly burn DESC, capped at 24
+  - Header shows the aggregate monthly burn across all visible rows
+  - To remove a row, reclassify the underlying transaction via the inline register editor — the row disappears on the next snapshot fetch
 - [x] **Reconciliation history drill-down** (2026-05-19)
   - `getDashboardSnapshot()` SQL now returns every reconciliation period (sorted `period_end DESC` within each account, not just the latest)
   - `groupReconciliationsByAccount()` (pure helper, unit-tested) buckets the flat list into `{ latest, history[] }` per account
