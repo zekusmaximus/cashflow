@@ -162,7 +162,28 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
   );
 }
 
+export function groupReconciliationsByAccount(
+  periods: ReconciliationPeriod[],
+): { latest: ReconciliationPeriod; history: ReconciliationPeriod[] }[] {
+  // Preserves the SQL ordering: first row per account is the most recent
+  // because the snapshot query sorts by period_end DESC within each account.
+  const byAccount = new Map<
+    string,
+    { latest: ReconciliationPeriod; history: ReconciliationPeriod[] }
+  >();
+  for (const period of periods) {
+    const existing = byAccount.get(period.accountId);
+    if (!existing) {
+      byAccount.set(period.accountId, { latest: period, history: [] });
+    } else {
+      existing.history.push(period);
+    }
+  }
+  return Array.from(byAccount.values());
+}
+
 function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] }) {
+  const groups = groupReconciliationsByAccount(periods);
   return (
     <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
       <div className="flex items-center justify-between px-5 pt-5 pb-3">
@@ -176,12 +197,13 @@ function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] })
           <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
             Opening + inflows − outflows = computed closing, compared against the
             statement-reported closing balance. Variance must be zero (or
-            explained) before downstream tabs are trusted.
+            explained) before downstream tabs are trusted. Expand a card to see
+            prior periods.
           </p>
         </div>
       </div>
       <div className="grid grid-cols-1 gap-3 px-5 pb-5 md:grid-cols-2 xl:grid-cols-4">
-        {periods.length === 0 ? (
+        {groups.length === 0 ? (
           <div className="col-span-full rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
             No reconciliation periods computed yet. Run the
             <code className="mx-1 rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
@@ -190,8 +212,12 @@ function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] })
             MCP tool to populate.
           </div>
         ) : (
-          periods.map((period) => (
-            <ReconciliationCard key={period.accountId} period={period} />
+          groups.map((group) => (
+            <ReconciliationCard
+              key={group.latest.accountId}
+              period={group.latest}
+              history={group.history}
+            />
           ))
         )}
       </div>
@@ -199,17 +225,17 @@ function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] })
   );
 }
 
-function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
+function ReconciliationCard({
+  period,
+  history,
+}: {
+  period: ReconciliationPeriod;
+  history: ReconciliationPeriod[];
+}) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const badge = varianceBadge(period.varianceAmount);
   const isLiability = period.accountType === 'credit_card';
   const closingLabel = isLiability ? 'amount owed' : 'balance';
-
-  const badgeStyles: Record<typeof badge, string> = {
-    green: 'bg-moss/12 text-moss',
-    yellow: 'bg-clay/12 text-clay',
-    red: 'bg-ember/12 text-ember',
-    unknown: 'bg-ink/[0.06] text-ink/55',
-  };
 
   const badgeText =
     badge === 'unknown'
@@ -232,7 +258,7 @@ function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
         <span
           className={cn(
             'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tnum',
-            badgeStyles[badge],
+            varianceBadgeStyles[badge],
           )}
         >
           {badgeText}
@@ -262,7 +288,107 @@ function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
       ) : null}
 
       <VarianceExplanationEditor period={period} />
+
+      {history.length > 0 ? (
+        <div className="mt-3 border-t border-ink/[0.06] pt-2">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((open) => !open)}
+            aria-expanded={historyOpen}
+            className="flex w-full items-center justify-between rounded px-1 py-0.5 text-[11px] text-ink/55 hover:bg-ink/[0.05] hover:text-ink/80 focus:bg-ink/[0.05] focus:outline-none"
+          >
+            <span>
+              {historyOpen ? 'Hide' : 'Show'} {history.length} earlier period
+              {history.length === 1 ? '' : 's'}
+            </span>
+            <span aria-hidden className="text-ink/40">
+              {historyOpen ? '▾' : '▸'}
+            </span>
+          </button>
+          {historyOpen ? (
+            <ul className="mt-2 space-y-2">
+              {history.map((prior) => (
+                <ReconciliationHistoryRow
+                  key={`${prior.periodStart}-${prior.periodEnd}`}
+                  period={prior}
+                  isLiability={isLiability}
+                />
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+const varianceBadgeStyles: Record<'green' | 'yellow' | 'red' | 'unknown', string> = {
+  green: 'bg-moss/12 text-moss',
+  yellow: 'bg-clay/12 text-clay',
+  red: 'bg-ember/12 text-ember',
+  unknown: 'bg-ink/[0.06] text-ink/55',
+};
+
+function ReconciliationHistoryRow({
+  period,
+  isLiability,
+}: {
+  period: ReconciliationPeriod;
+  isLiability: boolean;
+}) {
+  const badge = varianceBadge(period.varianceAmount);
+  const closingLabel = isLiability ? 'amount owed' : 'balance';
+  const badgeText =
+    badge === 'unknown'
+      ? 'No statement'
+      : period.varianceAmount === 0
+        ? 'Reconciled'
+        : `${period.varianceAmount! > 0 ? '+' : ''}${currencyCents(period.varianceAmount!)}`;
+
+  return (
+    <li className="rounded border border-ink/[0.06] bg-white/60 px-2 py-1.5 text-[11px]">
+      <div className="flex items-start justify-between gap-2">
+        <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink/55 tnum">
+          {period.periodStart} → {period.periodEnd}
+        </div>
+        <span
+          className={cn(
+            'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tnum',
+            varianceBadgeStyles[badge],
+          )}
+        >
+          {badgeText}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-ink/55 tnum">
+        <span>
+          Computed{' '}
+          <span className="font-medium text-ink/75">
+            {period.computedClosingBalance === null
+              ? '—'
+              : currency(period.computedClosingBalance)}
+          </span>
+        </span>
+        <span>
+          Statement {closingLabel}{' '}
+          <span
+            className={cn(
+              'font-medium',
+              period.closingBalanceSource === null ? 'text-ink/35' : 'text-ink/75',
+            )}
+          >
+            {period.statementClosingBalance === null
+              ? '—'
+              : currency(period.statementClosingBalance)}
+          </span>
+        </span>
+      </div>
+      {period.varianceExplanation ? (
+        <p className="mt-1 italic leading-relaxed text-ink/60">
+          {period.varianceExplanation}
+        </p>
+      ) : null}
+    </li>
   );
 }
 

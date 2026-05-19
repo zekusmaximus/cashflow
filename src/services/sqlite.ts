@@ -322,9 +322,9 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
     cap: row.cap ?? 0,
   }));
 
-  // Latest reconciliation row per account. The subquery picks the max
-  // period_end per account_id so the dashboard always shows the freshest
-  // variance even when older months have also been reconciled.
+  // All reconciliation periods for every account, sorted so the most recent
+  // period per account is encountered first. The UI groups by account_id and
+  // exposes prior periods via the per-card history drill-down.
   const reconciliationRows = await database.select<ReconciliationRow>(
     `SELECT rp.account_id        AS accountId,
             (a.institution || ' · ' || a.account_name) AS accountLabel,
@@ -339,14 +339,7 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
             rp.variance_explanation AS varianceExplanation
        FROM reconciliation_periods rp
        JOIN accounts a ON a.id = rp.account_id
-       JOIN (
-         SELECT account_id, MAX(period_end) AS latest_end
-           FROM reconciliation_periods
-          GROUP BY account_id
-       ) latest
-         ON latest.account_id = rp.account_id
-        AND latest.latest_end = rp.period_end
-      ORDER BY a.institution ASC, a.account_name ASC`,
+      ORDER BY a.institution ASC, a.account_name ASC, rp.period_end DESC`,
   );
 
   const reconciliations: ReconciliationPeriod[] = reconciliationRows.map((row) => ({

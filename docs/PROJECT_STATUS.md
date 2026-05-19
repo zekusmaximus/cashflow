@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (variance explanation inline edit landed on reconciliation cards)
+**Last updated:** 2026-05-19 (variance explanation inline edit + reconciliation history drill-down landed)
 
 ## Snapshot
 
@@ -101,12 +101,14 @@ with `list_watch_root_files`. Using a Rust command for the copy keeps the
 watch-root path resolution in one place and avoids broadening the
 `plugin-fs` scope.
 
-**Next focus:** remaining roadmap §6 dashboard cards (HYSA trajectory chart,
-Capital-Plan Feasibility badge, real-data Subscription audit, reconciliation
-history drill-down). Manual `variance_explanation` entry UI landed
-2026-05-19 — reconciliation cards now expose click-to-edit explanations
-keyed by `(account_id, period_start, period_end)`, which is the same
-triple `reconcile_periods` preserves across reruns.
+**Next focus:** remaining roadmap §6 dashboard cards (HYSA trajectory
+chart, Capital-Plan Feasibility badge, real-data Subscription audit).
+Manual `variance_explanation` entry UI and reconciliation history
+drill-down both landed 2026-05-19 — reconciliation cards now expose
+click-to-edit explanations and a "Show N earlier periods" toggle that
+reveals every prior period for the same account (sorted period_end
+DESC), rendered as compact rows with their own variance badge and
+explanation.
 
 ## Architecture (one-screen reminder)
 
@@ -215,6 +217,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Transaction Register inline edit: click-to-edit merchant + category per row; Enter saves, Esc cancels, blur saves; optimistic React Query update with rollback-on-error, then invalidates `transaction-register` and `dashboard-snapshot`
 - [x] "Add source" file upload: Tauri file picker (csv/pdf) → `copy_to_watch_root` command → `document-checklist` invalidation; "Rescan folder" wired to the same invalidation; button disabled outside the Tauri runtime
 - [x] Reconciliation card inline variance-explanation edit: click the explanation (or "+ Add variance explanation" affordance) to open a textarea — Esc cancels, ⌘/Ctrl+Enter saves, blur saves; optimistic React Query update with rollback-on-error; persisted via `updateVarianceExplanation()` keyed by `(account_id, period_start, period_end)`, the same triple `reconcile_periods` preserves across reruns
+- [x] Reconciliation history drill-down: snapshot SQL now returns every period (sorted `period_end DESC` within each account); each card shows the latest period inline plus a "Show N earlier periods" toggle that reveals compact rows for every prior period with its own variance badge and explanation
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -305,7 +308,10 @@ normal use of the repo for transaction-based spending analysis.
 - [ ] HYSA trajectory chart
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
 - [ ] Subscription audit / leakage card driven from real data
-- [ ] Reconciliation history drill-down (currently only the latest period per account)
+- [x] **Reconciliation history drill-down** (2026-05-19)
+  - `getDashboardSnapshot()` SQL now returns every reconciliation period (sorted `period_end DESC` within each account, not just the latest)
+  - `groupReconciliationsByAccount()` (pure helper, unit-tested) buckets the flat list into `{ latest, history[] }` per account
+  - Each card shows the latest period inline; a "Show N earlier periods" toggle reveals compact `ReconciliationHistoryRow` entries for each prior period with its own variance badge and explanation
 - [x] **Manual `variance_explanation` entry UI** (2026-05-19)
   - Click the explanation (or "+ Add variance explanation" affordance) on a reconciliation card to open an inline textarea
   - Esc cancels, ⌘/Ctrl+Enter saves, blur saves; Save/Cancel buttons available below the field
