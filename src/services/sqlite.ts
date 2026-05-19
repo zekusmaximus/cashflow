@@ -2,6 +2,8 @@ import type {
   CashFlowMonth,
   DashboardRange,
   DashboardSnapshot,
+  HysaTrajectory,
+  HysaTrajectoryPoint,
   LeakageCategory,
   LiquidityGate,
   ReconciliationPeriod,
@@ -11,7 +13,11 @@ import type {
   TransactionPage,
 } from '../features/dashboard/types';
 import { dashboardMock } from '../features/dashboard/mock';
+import { projectHysaGate } from '../features/dashboard/hysa-projection';
 import { isTauriRuntime } from '../lib/tauri';
+
+/** Master-index §9: $80K HYSA gate before 2027 Roth re-engagement. */
+const HYSA_GATE_TARGET = 80_000;
 
 interface SqlDatabase {
   execute(query: string, bindValues?: unknown[]): Promise<unknown>;
@@ -240,6 +246,12 @@ interface LeakageRow {
   cap: number | null;
 }
 
+interface HysaPointRow {
+  date: string;
+  balance: number | null;
+  accountLabel: string;
+}
+
 interface SubscriptionRow {
   merchant: string | null;
   subcategory: string | null;
@@ -394,6 +406,31 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
       ORDER BY a.institution ASC, a.account_name ASC, rp.period_end DESC`,
   );
 
+  // HYSA trajectory: one (date, balance) point per reconciled period for any
+  // savings account. The Ally HYSA CSV has no running-balance column, so we
+  // rely on reconcile_periods.computed_closing_balance (falling back to the
+  // statement balance when present). Points are sorted oldest→newest so the
+  // projection helper can fit a straight line.
+  const hysaPointRows = await database.select<HysaPointRow>(
+    `SELECT rp.period_end AS date,
+            COALESCE(rp.statement_closing_balance, rp.computed_closing_balance) AS balance,
+            (a.institution || ' · ' || a.account_name)                          AS accountLabel
+       FROM reconciliation_periods rp
+       JOIN accounts a ON a.id = rp.account_id
+      WHERE a.account_type = 'savings'
+      ORDER BY rp.period_end ASC`,
+  );
+
+  const hysaPoints: HysaTrajectoryPoint[] = hysaPointRows
+    .filter((row) => row.balance !== null)
+    .map((row) => ({ date: row.date, balance: row.balance ?? 0 }));
+  const hysaTrajectory: HysaTrajectory = {
+    points: hysaPoints,
+    targetAmount: HYSA_GATE_TARGET,
+    projection: projectHysaGate(hysaPoints, HYSA_GATE_TARGET),
+    accountLabel: hysaPointRows[0]?.accountLabel ?? null,
+  };
+
   const reconciliations: ReconciliationPeriod[] = reconciliationRows.map((row) => ({
     accountId: row.accountId,
     accountLabel: row.accountLabel,
@@ -410,14 +447,15 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
 
   // If there is no real data at all, return the explicit demo fallback so the
   // empty dashboard still communicates expected composition. Once any real
-  // data lands (months/gates/leakage/reconciliations/subscriptions), use only
-  // what's in the DB.
+  // data lands (months/gates/leakage/reconciliations/subscriptions/HYSA), use
+  // only what's in the DB.
   const hasRealData =
     months.length > 0 ||
     gates.length > 0 ||
     leakageCategories.length > 0 ||
     reconciliations.length > 0 ||
-    subscriptionAudit.length > 0;
+    subscriptionAudit.length > 0 ||
+    hysaTrajectory.points.length > 0;
   if (!hasRealData) {
     return { ...dashboardMock };
   }
@@ -428,6 +466,7 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
     leakageCategories,
     reconciliations,
     subscriptionAudit,
+    hysaTrajectory,
   };
 }
 
