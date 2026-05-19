@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (UI interactivity planning — inline edits + file upload)
+**Last updated:** 2026-05-19 (UI interactivity sprint landed — inline edits + file upload)
 
 ## Snapshot
 
@@ -71,12 +71,39 @@ after the pairing pass. The three affected rows ($4,500 on 2026-01-05,
 $5,080 on 2026-04-08, $1,000 on 2026-05-08) will be corrected on the next
 `pair_transfers` call.
 
-**Next tasks (UI interactivity sprint)**: Two self-contained frontend features that together make the app the primary day-to-day maintenance surface, reducing how often a Claude Cowork session is needed for routine cleanup:
+**UI interactivity sprint landed (2026-05-19):** the app is now the primary
+day-to-day maintenance surface for routine cleanup; Cowork is reserved for
+pattern-based classification rules, transfer pairing, and deeper analysis.
 
-1. **Transaction Register inline edit** — category/merchant overrides directly in the register table, calling the already-implemented `upsertTransactionOverride()` in `src/services/sqlite.ts`. Because the Tauri app and the MCP server share one SQLite DB, any override saved here is immediately visible to Cowork without re-syncing.
-2. **"Add source" file upload** — wire the existing shell button on the Source Intake view to a Tauri file-picker dialog; copy the selected CSV or PDF into the watch root (`C:\Users\Jeff\Documents\Cashflow`); trigger a checklist rescan so the intake view reflects the new file. Requires `@tauri-apps/plugin-dialog` + `@tauri-apps/plugin-fs` (both already available in Tauri v2) plus an invoke call to refresh the checklist query.
+1. **Transaction Register inline edit** — click the merchant name or the
+   category badge in any register row to edit; Enter saves, Esc cancels,
+   blur saves. Save calls `upsertTransactionOverride()` in
+   `src/services/sqlite.ts` and uses React Query optimistic updates
+   (rollback on error) followed by invalidation of `transaction-register`
+   and `dashboard-snapshot`. Because the Tauri app and the MCP server share
+   one SQLite DB, every override is immediately visible to Cowork.
+2. **"Add source" file upload** — the previously inert "Add source" button
+   on the Source Intake view now opens a Tauri file picker filtered to
+   `.csv` and `.pdf`, copies the chosen file into the watch root via the
+   new `copy_to_watch_root` Tauri command, and invalidates the
+   `document-checklist` query so the intake view rescans immediately.
+   "Rescan folder" is now wired to the same invalidation. Outside the Tauri
+   runtime (browser dev), the upload button is disabled with an
+   explanatory tooltip.
 
-Workflow intent: use the UI for quick one-off fixes and file drops; open Cowork only when you need pattern-based classification rules, transfer pairing, or deeper spending analysis. See roadmap §6 for full task breakdown.
+**Backend prep (same sprint):** added `@tauri-apps/plugin-dialog` (JS) and
+`tauri-plugin-dialog` (Rust), registered the dialog plugin in `main.rs`,
+added `dialog:default` to the main-window capability, and implemented the
+`copy_to_watch_root(source_path)` Tauri command — Rust-side `std::fs::copy`
+with extension whitelist (csv/pdf), no-overwrite guard, mkdir-if-missing,
+plus 5 unit tests. The factored `resolve_watch_root()` helper is now shared
+with `list_watch_root_files`. Using a Rust command for the copy keeps the
+watch-root path resolution in one place and avoids broadening the
+`plugin-fs` scope.
+
+**Next focus:** remaining roadmap §6 dashboard cards (HYSA trajectory chart,
+Capital-Plan Feasibility badge, real-data Subscription audit, reconciliation
+history drill-down, manual `variance_explanation` entry UI).
 
 ## Architecture (one-screen reminder)
 
@@ -112,7 +139,8 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 ## Done
 
 ### Foundation
-- [x] Tauri v2 + React + TypeScript shell with SQLite + filesystem plugins
+- [x] Tauri v2 + React + TypeScript shell with SQLite + filesystem + dialog plugins
+- [x] `copy_to_watch_root` Rust command: extension whitelist (csv/pdf), no-overwrite guard, mkdir-if-missing; shares the env-aware `resolve_watch_root()` helper with `list_watch_root_files`
 - [x] Restrictive Content Security Policy
 - [x] Vite watcher excludes `.venv*`, `server/`, `src-tauri/target/`, etc.
 - [x] Python MCP server scaffold with read-only SQL guard
@@ -181,6 +209,8 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Cash Flow Dashboard: real Inflow/Outflow bars from `monthly_cashflow_summary` view
 - [x] React Query: 5s staleTime + refetchOnWindowFocus for snappy local refresh
 - [x] Transaction Register section on Dashboard: paginated table (50/page) with direction filter (Outflows default / Inflows / All), merchant/description display, category badge (unclassified highlighted), pagination controls
+- [x] Transaction Register inline edit: click-to-edit merchant + category per row; Enter saves, Esc cancels, blur saves; optimistic React Query update with rollback-on-error, then invalidates `transaction-register` and `dashboard-snapshot`
+- [x] "Add source" file upload: Tauri file picker (csv/pdf) → `copy_to_watch_root` command → `document-checklist` invalidation; "Rescan folder" wired to the same invalidation; button disabled outside the Tauri runtime
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -257,19 +287,17 @@ normal use of the repo for transaction-based spending analysis.
 ### 6. Dashboard build-out
 - [ ] 14 sections per master index §6 (currently 5 cards: cash flow, HYSA gate, leakage, reconciliation, transaction register)
 - [x] Transaction Register — read-only paginated ledger with direction filter and category display
-- [ ] **Transaction Register — inline classification edit UI** *(next task)*
-  - Editable `primary_category` and `merchant_normalized` fields per row (click-to-edit or pencil icon)
-  - On save, calls `upsertTransactionOverride()` already implemented in `src/services/sqlite.ts`
-  - Optimistic UI update; React Query invalidates `transaction-register` key on success
-  - Row badge changes from amber "unclassified" to the saved category immediately
-  - No new backend code needed — the DB function and override schema are already in place
-- [ ] **"Add source" file upload button** *(next task, parallel to above)*
-  - Replace the no-op shell button in `document-intake-view.tsx` with a real handler
-  - Use `@tauri-apps/plugin-dialog` `open()` to show a file picker filtered to `.csv` and `.pdf`
-  - Use `@tauri-apps/plugin-fs` `copyFile()` to place the file in the watch root
-  - Invalidate the `document-checklist` React Query key so the intake view rescans immediately
-  - Optionally invoke `read_document_metadata` MCP tool afterward to persist the match in the DB
-  - Both plugins are already available; only frontend wiring is required
+- [x] **Transaction Register — inline classification edit UI** (2026-05-19)
+  - Click-to-edit `merchant_normalized` (description cell) and `primary_category` (badge) per row
+  - Enter saves, Esc cancels, blur saves; empty/unchanged values are no-ops
+  - Save calls `upsertTransactionOverride()` in `src/services/sqlite.ts`
+  - Optimistic React Query update (with rollback-on-error) then invalidates `transaction-register` and `dashboard-snapshot`
+- [x] **"Add source" file upload button** (2026-05-19)
+  - Tauri file picker filtered to `.csv` and `.pdf` via `@tauri-apps/plugin-dialog`
+  - Copy into the watch root via the Rust-side `copy_to_watch_root` command (avoids broadening `plugin-fs` scope to `$HOME/Documents`)
+  - Invalidates the `document-checklist` React Query key; "Rescan folder" wired to the same invalidation
+  - Disabled outside the Tauri runtime; inline success/error message under the button
+  - MCP `read_document_metadata` invocation deferred — Tauri frontend has no path to MCP tools; the existing 5s rescan + Cowork ingestion flow is sufficient
 - [ ] HYSA trajectory chart
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
 - [ ] Subscription audit / leakage card driven from real data

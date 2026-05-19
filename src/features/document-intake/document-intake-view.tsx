@@ -1,4 +1,5 @@
-import type { UseQueryResult } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Check,
@@ -6,12 +7,14 @@ import {
   FileText,
   Folder,
   LayoutGrid,
+  Loader2,
   Plus,
   Search,
   ScanLine,
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { useTransactionCounts } from '../../hooks/use-transaction-counts';
+import { isTauriRuntime } from '../../lib/tauri';
 import { cn } from '../../lib/utils';
 import type {
   ChecklistCategorySummary,
@@ -26,6 +29,50 @@ interface DocumentIntakeViewProps {
 
 export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
   const transactionCountsQuery = useTransactionCounts();
+  const queryClient = useQueryClient();
+  const tauriRuntime = isTauriRuntime();
+  const [uploadState, setUploadState] = useState<
+    { kind: 'idle' } | { kind: 'busy' } | { kind: 'error'; message: string } | { kind: 'success'; filename: string }
+  >({ kind: 'idle' });
+
+  const handleAddSource = async () => {
+    setUploadState({ kind: 'busy' });
+    try {
+      const [{ open }, { invoke }] = await Promise.all([
+        import('@tauri-apps/plugin-dialog'),
+        import('@tauri-apps/api/core'),
+      ]);
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'Statements & exports', extensions: ['csv', 'pdf'] }],
+      });
+      if (selected === null) {
+        setUploadState({ kind: 'idle' });
+        return;
+      }
+      const sourcePath = Array.isArray(selected) ? selected[0] : selected;
+      if (typeof sourcePath !== 'string') {
+        setUploadState({ kind: 'idle' });
+        return;
+      }
+      const result = await invoke<{ filename: string; destination: string }>(
+        'copy_to_watch_root',
+        { sourcePath },
+      );
+      await queryClient.invalidateQueries({ queryKey: ['document-checklist'] });
+      setUploadState({ kind: 'success', filename: result.filename });
+    } catch (err) {
+      setUploadState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const handleRescan = () => {
+    void queryClient.invalidateQueries({ queryKey: ['document-checklist'] });
+  };
 
   if (query.isLoading) {
     return <LoadingState />;
@@ -67,21 +114,44 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
             files can come later.
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 rounded-full border border-ink/15 bg-white px-3 py-1.5 text-[12px] font-medium text-ink/75 hover:border-ink/35"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add source
-          </button>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1.5 text-[12px] font-medium text-fog hover:bg-tide"
-          >
-            <ScanLine className="h-3.5 w-3.5" />
-            Rescan folder
-          </button>
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleAddSource}
+              disabled={!tauriRuntime || uploadState.kind === 'busy'}
+              title={
+                tauriRuntime
+                  ? 'Pick a CSV or PDF and copy it into the watch root'
+                  : 'File upload is only available inside the Tauri desktop app'
+              }
+              className="inline-flex items-center gap-1.5 rounded-full border border-ink/15 bg-white px-3 py-1.5 text-[12px] font-medium text-ink/75 hover:border-ink/35 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {uploadState.kind === 'busy' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}
+              Add source
+            </button>
+            <button
+              type="button"
+              onClick={handleRescan}
+              className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1.5 text-[12px] font-medium text-fog hover:bg-tide"
+            >
+              <ScanLine className="h-3.5 w-3.5" />
+              Rescan folder
+            </button>
+          </div>
+          {uploadState.kind === 'success' ? (
+            <div className="text-[11px] text-moss">
+              Added <span className="font-mono">{uploadState.filename}</span> to the watch root.
+            </div>
+          ) : uploadState.kind === 'error' ? (
+            <div className="max-w-[320px] text-right text-[11px] text-ember">
+              {uploadState.message}
+            </div>
+          ) : null}
         </div>
       </div>
 
