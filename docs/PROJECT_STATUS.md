@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (UI interactivity sprint landed — inline edits + file upload)
+**Last updated:** 2026-05-19 (variance explanation inline edit landed on reconciliation cards)
 
 ## Snapshot
 
@@ -103,7 +103,10 @@ watch-root path resolution in one place and avoids broadening the
 
 **Next focus:** remaining roadmap §6 dashboard cards (HYSA trajectory chart,
 Capital-Plan Feasibility badge, real-data Subscription audit, reconciliation
-history drill-down, manual `variance_explanation` entry UI).
+history drill-down). Manual `variance_explanation` entry UI landed
+2026-05-19 — reconciliation cards now expose click-to-edit explanations
+keyed by `(account_id, period_start, period_end)`, which is the same
+triple `reconcile_periods` preserves across reruns.
 
 ## Architecture (one-screen reminder)
 
@@ -211,6 +214,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Transaction Register section on Dashboard: paginated table (50/page) with direction filter (Outflows default / Inflows / All), merchant/description display, category badge (unclassified highlighted), pagination controls
 - [x] Transaction Register inline edit: click-to-edit merchant + category per row; Enter saves, Esc cancels, blur saves; optimistic React Query update with rollback-on-error, then invalidates `transaction-register` and `dashboard-snapshot`
 - [x] "Add source" file upload: Tauri file picker (csv/pdf) → `copy_to_watch_root` command → `document-checklist` invalidation; "Rescan folder" wired to the same invalidation; button disabled outside the Tauri runtime
+- [x] Reconciliation card inline variance-explanation edit: click the explanation (or "+ Add variance explanation" affordance) to open a textarea — Esc cancels, ⌘/Ctrl+Enter saves, blur saves; optimistic React Query update with rollback-on-error; persisted via `updateVarianceExplanation()` keyed by `(account_id, period_start, period_end)`, the same triple `reconcile_periods` preserves across reruns
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -302,7 +306,11 @@ normal use of the repo for transaction-based spending analysis.
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
 - [ ] Subscription audit / leakage card driven from real data
 - [ ] Reconciliation history drill-down (currently only the latest period per account)
-- [ ] Manual `variance_explanation` entry UI (currently DB-only)
+- [x] **Manual `variance_explanation` entry UI** (2026-05-19)
+  - Click the explanation (or "+ Add variance explanation" affordance) on a reconciliation card to open an inline textarea
+  - Esc cancels, ⌘/Ctrl+Enter saves, blur saves; Save/Cancel buttons available below the field
+  - `updateVarianceExplanation()` in `src/services/sqlite.ts` runs an UPDATE keyed by `(account_id, period_start, period_end)` — the same triple `reconcile_periods` preserves across reruns, so notes survive recomputation
+  - Optimistic React Query update (with rollback-on-error) followed by invalidation of `dashboard-snapshot`
 
 ## Known issues and loose ends
 
