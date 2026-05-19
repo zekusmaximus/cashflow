@@ -1,7 +1,11 @@
 import { useState } from 'react';
-import type { UseQueryResult } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { cn, currency, percent } from '../../lib/utils';
 import { useTransactionRegister } from '../../hooks/use-transaction-register';
+import {
+  upsertTransactionOverride,
+  type UpsertTransactionOverrideParams,
+} from '../../services/sqlite';
 import type {
   CashFlowMonth,
   DashboardRange,
@@ -11,6 +15,7 @@ import type {
   ReconciliationPeriod,
   Transaction,
   TransactionDirectionFilter,
+  TransactionPage,
 } from './types';
 
 // Variance thresholds match master index §6 #2: zero or explained variance
@@ -674,13 +679,108 @@ function TransactionRegisterSection() {
   );
 }
 
+type EditField = 'merchant' | 'category';
+
 function TransactionRow({ tx }: { tx: Transaction }) {
+  const queryClient = useQueryClient();
+  const [editField, setEditField] = useState<EditField | null>(null);
+  const [draft, setDraft] = useState('');
+
+  const mutation = useMutation({
+    mutationFn: (params: UpsertTransactionOverrideParams) =>
+      upsertTransactionOverride(params),
+    onMutate: async (params) => {
+      await queryClient.cancelQueries({ queryKey: ['transaction-register'] });
+      const previous = queryClient.getQueriesData<TransactionPage>({
+        queryKey: ['transaction-register'],
+      });
+      queryClient.setQueriesData<TransactionPage>(
+        { queryKey: ['transaction-register'] },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            rows: old.rows.map((row) =>
+              row.id === params.transactionId
+                ? {
+                    ...row,
+                    merchantNormalized:
+                      params.merchantNormalized ?? row.merchantNormalized,
+                    primaryCategory:
+                      params.primaryCategory ?? row.primaryCategory,
+                  }
+                : row,
+            ),
+          };
+        },
+      );
+      return { previous };
+    },
+    onError: (_err, _params, context) => {
+      if (!context?.previous) return;
+      for (const [key, data] of context.previous) {
+        queryClient.setQueryData(key, data);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['transaction-register'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-snapshot'] });
+    },
+  });
+
+  const startEdit = (field: EditField) => {
+    setEditField(field);
+    setDraft(field === 'merchant' ? (tx.merchantNormalized ?? '') : tx.primaryCategory);
+  };
+
+  const cancelEdit = () => {
+    setEditField(null);
+    setDraft('');
+  };
+
+  const saveEdit = () => {
+    if (!editField) return;
+    const trimmed = draft.trim();
+    const current =
+      editField === 'merchant'
+        ? (tx.merchantNormalized ?? '')
+        : tx.primaryCategory;
+    if (!trimmed || trimmed === current) {
+      cancelEdit();
+      return;
+    }
+    mutation.mutate({
+      transactionId: tx.id,
+      accountId: tx.accountId,
+      occurredOn: tx.occurredOn,
+      amount: tx.amount,
+      descriptionRaw: tx.descriptionRaw,
+      ...(editField === 'merchant'
+        ? { merchantNormalized: trimmed }
+        : { primaryCategory: trimmed }),
+    });
+    cancelEdit();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveEdit();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelEdit();
+    }
+  };
+
   const isOutflow = tx.direction === 'outflow';
   const isUnclassified = tx.primaryCategory === 'unclassified';
   const displayLabel = tx.merchantNormalized ?? tx.descriptionRaw;
   const categoryLabel = tx.subcategory
     ? `${tx.primaryCategory} / ${tx.subcategory}`
     : tx.primaryCategory;
+
+  const inputClasses =
+    'w-full rounded border border-tide/50 bg-white px-1.5 py-0.5 text-[12px] text-ink outline-none focus:border-tide';
 
   return (
     <tr className="hover:bg-paper/40 transition-colors">
@@ -691,21 +791,55 @@ function TransactionRow({ tx }: { tx: Transaction }) {
         <span className="max-w-[140px] truncate block">{tx.accountLabel}</span>
       </td>
       <td className="px-4 py-2.5">
-        <span className="block max-w-[260px] truncate text-ink" title={tx.descriptionRaw}>
-          {displayLabel}
-        </span>
+        {editField === 'merchant' ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleKeyDown}
+            onBlur={saveEdit}
+            placeholder="Merchant name"
+            className={cn(inputClasses, 'max-w-[260px]')}
+            aria-label="Edit merchant"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => startEdit('merchant')}
+            title={`${tx.descriptionRaw}\n\nClick to edit merchant`}
+            className="block w-full max-w-[260px] truncate rounded px-1 py-0.5 text-left text-ink hover:bg-ink/[0.05] focus:bg-ink/[0.05] focus:outline-none"
+          >
+            {displayLabel}
+          </button>
+        )}
       </td>
       <td className="px-4 py-2.5">
-        <span
-          className={cn(
-            'inline-block rounded px-1.5 py-0.5 text-[10px] font-medium',
-            isUnclassified
-              ? 'bg-clay/12 text-clay'
-              : 'bg-ink/[0.05] text-ink/65',
-          )}
-        >
-          {categoryLabel}
-        </span>
+        {editField === 'category' ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleKeyDown}
+            onBlur={saveEdit}
+            placeholder="primary_category"
+            className={cn(inputClasses, 'max-w-[200px] font-mono text-[11px]')}
+            aria-label="Edit category"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => startEdit('category')}
+            title="Click to edit category"
+            className={cn(
+              'inline-block rounded px-1.5 py-0.5 text-[10px] font-medium hover:ring-1 hover:ring-tide/40 focus:outline-none focus:ring-1 focus:ring-tide/60',
+              isUnclassified
+                ? 'bg-clay/12 text-clay'
+                : 'bg-ink/[0.05] text-ink/65',
+            )}
+          >
+            {categoryLabel}
+          </button>
+        )}
       </td>
       <td
         className={cn(
