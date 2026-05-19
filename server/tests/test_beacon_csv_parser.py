@@ -236,6 +236,7 @@ def beacon_ingest_harness(
         docs_dir=project_root / "docs",
         tracker_csv_path=project_root / "docs" / "Spreadsheet_checklist_for_document_tracking.csv",
         master_index_path=project_root / "docs" / "00_CASH_FLOW_MASTER_INDEX.md",
+        project_status_path=project_root / "docs" / "PROJECT_STATUS.md",
         database_path=database.database_path,
         schema_path=schema_path,
         watch_root=watch_root,
