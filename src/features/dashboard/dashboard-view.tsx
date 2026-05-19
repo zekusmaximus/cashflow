@@ -3,16 +3,25 @@ import { useMutation, useQueryClient, type UseQueryResult } from '@tanstack/reac
 import { cn, currency, percent } from '../../lib/utils';
 import { useTransactionRegister } from '../../hooks/use-transaction-register';
 import {
+  updateVarianceExplanation,
   upsertTransactionOverride,
+  type UpdateVarianceExplanationParams,
   type UpsertTransactionOverrideParams,
 } from '../../services/sqlite';
+import {
+  assessCapitalPlanFeasibility,
+  type FeasibilityAssessment,
+  type FeasibilityStatus,
+} from './feasibility';
 import type {
   CashFlowMonth,
   DashboardRange,
   DashboardSnapshot,
+  HysaTrajectory,
   LeakageCategory,
   LiquidityGate,
   ReconciliationPeriod,
+  SubscriptionAuditEntry,
   Transaction,
   TransactionDirectionFilter,
   TransactionPage,
@@ -64,7 +73,14 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
     );
   }
 
-  const { months, gates, leakageCategories, reconciliations } = query.data;
+  const {
+    months,
+    gates,
+    leakageCategories,
+    reconciliations,
+    subscriptionAudit,
+    hysaTrajectory,
+  } = query.data;
   const totalInflow = months.reduce((total, m) => total + m.inflow, 0);
   const totalOutflow = months.reduce((total, m) => total + m.outflow, 0);
   const netYtd = totalInflow - totalOutflow;
@@ -79,6 +95,12 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
   const dataMax = Math.max(0, ...months.flatMap((m) => [m.inflow, m.outflow]));
   const chartMax = Math.max(20000, Math.ceil(dataMax / 5000) * 5000);
   const yAxisLabels = [chartMax, chartMax * 0.75, chartMax * 0.5, chartMax * 0.25, 0];
+
+  const feasibility = assessCapitalPlanFeasibility(
+    months,
+    hysaTrajectory,
+    leakageCategories,
+  );
 
   return (
     <div>
@@ -143,6 +165,8 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
         </KpiTile>
       </div>
 
+      <FeasibilitySection assessment={feasibility} />
+
       <div
         className="grid gap-5"
         style={{ gridTemplateColumns: 'minmax(0, 1.45fr) minmax(0, 1fr)' }}
@@ -151,16 +175,41 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
         <GatesPanel gates={gates} />
       </div>
 
+      <HysaTrajectorySection trajectory={hysaTrajectory} />
+
       <ReconciliationSection periods={reconciliations} />
 
       <LeakageSection categories={leakageCategories} />
+
+      <SubscriptionAuditSection entries={subscriptionAudit} />
 
       <TransactionRegisterSection />
     </div>
   );
 }
 
+export function groupReconciliationsByAccount(
+  periods: ReconciliationPeriod[],
+): { latest: ReconciliationPeriod; history: ReconciliationPeriod[] }[] {
+  // Preserves the SQL ordering: first row per account is the most recent
+  // because the snapshot query sorts by period_end DESC within each account.
+  const byAccount = new Map<
+    string,
+    { latest: ReconciliationPeriod; history: ReconciliationPeriod[] }
+  >();
+  for (const period of periods) {
+    const existing = byAccount.get(period.accountId);
+    if (!existing) {
+      byAccount.set(period.accountId, { latest: period, history: [] });
+    } else {
+      existing.history.push(period);
+    }
+  }
+  return Array.from(byAccount.values());
+}
+
 function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] }) {
+  const groups = groupReconciliationsByAccount(periods);
   return (
     <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
       <div className="flex items-center justify-between px-5 pt-5 pb-3">
@@ -174,12 +223,13 @@ function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] })
           <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
             Opening + inflows − outflows = computed closing, compared against the
             statement-reported closing balance. Variance must be zero (or
-            explained) before downstream tabs are trusted.
+            explained) before downstream tabs are trusted. Expand a card to see
+            prior periods.
           </p>
         </div>
       </div>
       <div className="grid grid-cols-1 gap-3 px-5 pb-5 md:grid-cols-2 xl:grid-cols-4">
-        {periods.length === 0 ? (
+        {groups.length === 0 ? (
           <div className="col-span-full rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
             No reconciliation periods computed yet. Run the
             <code className="mx-1 rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
@@ -188,8 +238,12 @@ function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] })
             MCP tool to populate.
           </div>
         ) : (
-          periods.map((period) => (
-            <ReconciliationCard key={period.accountId} period={period} />
+          groups.map((group) => (
+            <ReconciliationCard
+              key={group.latest.accountId}
+              period={group.latest}
+              history={group.history}
+            />
           ))
         )}
       </div>
@@ -197,17 +251,17 @@ function ReconciliationSection({ periods }: { periods: ReconciliationPeriod[] })
   );
 }
 
-function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
+function ReconciliationCard({
+  period,
+  history,
+}: {
+  period: ReconciliationPeriod;
+  history: ReconciliationPeriod[];
+}) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const badge = varianceBadge(period.varianceAmount);
   const isLiability = period.accountType === 'credit_card';
   const closingLabel = isLiability ? 'amount owed' : 'balance';
-
-  const badgeStyles: Record<typeof badge, string> = {
-    green: 'bg-moss/12 text-moss',
-    yellow: 'bg-clay/12 text-clay',
-    red: 'bg-ember/12 text-ember',
-    unknown: 'bg-ink/[0.06] text-ink/55',
-  };
 
   const badgeText =
     badge === 'unknown'
@@ -230,7 +284,7 @@ function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
         <span
           className={cn(
             'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tnum',
-            badgeStyles[badge],
+            varianceBadgeStyles[badge],
           )}
         >
           {badgeText}
@@ -259,12 +313,254 @@ function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
         </p>
       ) : null}
 
+      <VarianceExplanationEditor period={period} />
+
+      {history.length > 0 ? (
+        <div className="mt-3 border-t border-ink/[0.06] pt-2">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((open) => !open)}
+            aria-expanded={historyOpen}
+            className="flex w-full items-center justify-between rounded px-1 py-0.5 text-[11px] text-ink/55 hover:bg-ink/[0.05] hover:text-ink/80 focus:bg-ink/[0.05] focus:outline-none"
+          >
+            <span>
+              {historyOpen ? 'Hide' : 'Show'} {history.length} earlier period
+              {history.length === 1 ? '' : 's'}
+            </span>
+            <span aria-hidden className="text-ink/40">
+              {historyOpen ? '▾' : '▸'}
+            </span>
+          </button>
+          {historyOpen ? (
+            <ul className="mt-2 space-y-2">
+              {history.map((prior) => (
+                <ReconciliationHistoryRow
+                  key={`${prior.periodStart}-${prior.periodEnd}`}
+                  period={prior}
+                  isLiability={isLiability}
+                />
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const varianceBadgeStyles: Record<'green' | 'yellow' | 'red' | 'unknown', string> = {
+  green: 'bg-moss/12 text-moss',
+  yellow: 'bg-clay/12 text-clay',
+  red: 'bg-ember/12 text-ember',
+  unknown: 'bg-ink/[0.06] text-ink/55',
+};
+
+function ReconciliationHistoryRow({
+  period,
+  isLiability,
+}: {
+  period: ReconciliationPeriod;
+  isLiability: boolean;
+}) {
+  const badge = varianceBadge(period.varianceAmount);
+  const closingLabel = isLiability ? 'amount owed' : 'balance';
+  const badgeText =
+    badge === 'unknown'
+      ? 'No statement'
+      : period.varianceAmount === 0
+        ? 'Reconciled'
+        : `${period.varianceAmount! > 0 ? '+' : ''}${currencyCents(period.varianceAmount!)}`;
+
+  return (
+    <li className="rounded border border-ink/[0.06] bg-white/60 px-2 py-1.5 text-[11px]">
+      <div className="flex items-start justify-between gap-2">
+        <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink/55 tnum">
+          {period.periodStart} → {period.periodEnd}
+        </div>
+        <span
+          className={cn(
+            'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tnum',
+            varianceBadgeStyles[badge],
+          )}
+        >
+          {badgeText}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-ink/55 tnum">
+        <span>
+          Computed{' '}
+          <span className="font-medium text-ink/75">
+            {period.computedClosingBalance === null
+              ? '—'
+              : currency(period.computedClosingBalance)}
+          </span>
+        </span>
+        <span>
+          Statement {closingLabel}{' '}
+          <span
+            className={cn(
+              'font-medium',
+              period.closingBalanceSource === null ? 'text-ink/35' : 'text-ink/75',
+            )}
+          >
+            {period.statementClosingBalance === null
+              ? '—'
+              : currency(period.statementClosingBalance)}
+          </span>
+        </span>
+      </div>
       {period.varianceExplanation ? (
-        <p className="mt-2 text-[11px] italic leading-relaxed text-ink/65">
+        <p className="mt-1 italic leading-relaxed text-ink/60">
           {period.varianceExplanation}
         </p>
       ) : null}
-    </div>
+    </li>
+  );
+}
+
+function VarianceExplanationEditor({ period }: { period: ReconciliationPeriod }) {
+  const queryClient = useQueryClient();
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(period.varianceExplanation);
+
+  const mutation = useMutation({
+    mutationFn: (params: UpdateVarianceExplanationParams) =>
+      updateVarianceExplanation(params),
+    onMutate: async (params) => {
+      await queryClient.cancelQueries({ queryKey: ['dashboard-snapshot'] });
+      const previous = queryClient.getQueriesData<DashboardSnapshot>({
+        queryKey: ['dashboard-snapshot'],
+      });
+      queryClient.setQueriesData<DashboardSnapshot>(
+        { queryKey: ['dashboard-snapshot'] },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            reconciliations: old.reconciliations.map((r) =>
+              r.accountId === params.accountId &&
+              r.periodStart === params.periodStart &&
+              r.periodEnd === params.periodEnd
+                ? { ...r, varianceExplanation: params.explanation }
+                : r,
+            ),
+          };
+        },
+      );
+      return { previous };
+    },
+    onError: (_err, _params, context) => {
+      if (!context?.previous) return;
+      for (const [key, data] of context.previous) {
+        queryClient.setQueryData(key, data);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard-snapshot'] });
+    },
+  });
+
+  const startEdit = () => {
+    setDraft(period.varianceExplanation);
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setDraft(period.varianceExplanation);
+  };
+
+  const saveEdit = () => {
+    const trimmed = draft.trim();
+    if (trimmed === period.varianceExplanation.trim()) {
+      setIsEditing(false);
+      return;
+    }
+    mutation.mutate({
+      accountId: period.accountId,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      explanation: trimmed,
+    });
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Multi-line note: Enter inserts newline; Ctrl/Cmd+Enter saves; Esc cancels.
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelEdit();
+    } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      saveEdit();
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <div className="mt-2">
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={saveEdit}
+          placeholder="Explain the variance (e.g. timing of a pending charge, statement cut date drift)…"
+          rows={3}
+          className="w-full rounded border border-tide/50 bg-white px-2 py-1 text-[11px] leading-relaxed text-ink outline-none focus:border-tide"
+          aria-label="Edit variance explanation"
+        />
+        <div className="mt-1 flex items-center justify-between text-[10px] text-ink/45">
+          <span>Esc cancels · ⌘/Ctrl+Enter saves · blur saves</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onMouseDown={(event) => {
+                // Prevent the textarea's onBlur from firing before this click.
+                event.preventDefault();
+                cancelEdit();
+              }}
+              className="rounded px-1.5 py-0.5 text-ink/55 hover:bg-ink/[0.06]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                saveEdit();
+              }}
+              className="rounded bg-tide/15 px-1.5 py-0.5 font-medium text-tide hover:bg-tide/25"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (period.varianceExplanation) {
+    return (
+      <button
+        type="button"
+        onClick={startEdit}
+        title="Click to edit explanation"
+        className="mt-2 block w-full rounded px-1 py-0.5 text-left text-[11px] italic leading-relaxed text-ink/65 hover:bg-ink/[0.05] focus:bg-ink/[0.05] focus:outline-none"
+      >
+        {period.varianceExplanation}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={startEdit}
+      className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-ink/45 hover:bg-ink/[0.05] hover:text-ink/70 focus:bg-ink/[0.05] focus:outline-none"
+    >
+      + Add variance explanation
+    </button>
   );
 }
 
@@ -554,6 +850,512 @@ function LeakageCard({ category }: { category: LeakageCategory }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// ── Capital-Plan Feasibility ────────────────────────────────────────────────
+
+const FEASIBILITY_BADGE_STYLES: Record<FeasibilityStatus, string> = {
+  green: 'bg-moss/12 text-moss',
+  yellow: 'bg-clay/12 text-clay',
+  red: 'bg-ember/12 text-ember',
+  unknown: 'bg-ink/[0.06] text-ink/55',
+};
+
+const FEASIBILITY_BADGE_LABEL: Record<FeasibilityStatus, string> = {
+  green: 'Green',
+  yellow: 'Yellow',
+  red: 'Red',
+  unknown: 'No signal',
+};
+
+const FEASIBILITY_DOT_STYLES: Record<FeasibilityStatus, string> = {
+  green: 'bg-moss',
+  yellow: 'bg-clay',
+  red: 'bg-ember',
+  unknown: 'bg-ink/25',
+};
+
+function FeasibilitySection({ assessment }: { assessment: FeasibilityAssessment }) {
+  return (
+    <section className="mb-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
+        <div className="min-w-0">
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Capital-plan feasibility · v1 heuristic
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            {assessment.headline}
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Heuristic combination of cash-flow, HYSA gate, and leakage signals.
+            Master-index §10 capital-plan tests (401(k)/HSA/Roth/rental net)
+            need paystub extraction, the normalization layer, and the forward
+            projection engine before they can drive this badge.
+          </p>
+        </div>
+        <span
+          className={cn(
+            'shrink-0 rounded-full px-3 py-1 text-[12px] font-semibold uppercase tracking-[0.16em]',
+            FEASIBILITY_BADGE_STYLES[assessment.status],
+          )}
+        >
+          {FEASIBILITY_BADGE_LABEL[assessment.status]}
+        </span>
+      </div>
+      <ul className="grid grid-cols-1 gap-2 px-5 pb-5 md:grid-cols-3">
+        {assessment.drivers.map((driver) => (
+          <li
+            key={driver.label}
+            className="rounded-lg border border-ink/8 bg-paper/50 p-3"
+          >
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className={cn(
+                  'inline-block h-2 w-2 rounded-full',
+                  FEASIBILITY_DOT_STYLES[driver.status],
+                )}
+              />
+              <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink/55">
+                {driver.label}
+              </span>
+            </div>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-ink/75">
+              {driver.detail}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ── HYSA trajectory ──────────────────────────────────────────────────────────
+
+const HYSA_CHART_WIDTH = 800;
+const HYSA_CHART_HEIGHT = 220;
+const HYSA_CHART_PADDING = { top: 16, right: 16, bottom: 28, left: 56 };
+
+function formatGateDate(iso: string): string {
+  // YYYY-MM-DD → "May 2026"
+  const ts = Date.parse(`${iso}T00:00:00Z`);
+  if (Number.isNaN(ts)) return iso;
+  return new Date(ts).toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function HysaTrajectorySection({ trajectory }: { trajectory: HysaTrajectory }) {
+  const { points, targetAmount, accountLabel } = trajectory;
+  const latest = points[points.length - 1] ?? null;
+  const progressPct = latest
+    ? Math.min(1, Math.max(0, latest.balance / targetAmount))
+    : 0;
+
+  return (
+    <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            HYSA trajectory
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            {accountLabel ?? 'High-yield savings'} progress toward {currency(targetAmount)} gate
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Sourced from <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">reconciliation_periods</code>{' '}
+            closing balances. Projection is a least-squares linear fit;
+            extrapolation assumes the same monthly trajectory holds.
+          </p>
+        </div>
+        {latest ? (
+          <div className="shrink-0 rounded-lg bg-ink/[0.04] px-3 py-1.5 text-right">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+              Latest balance
+            </div>
+            <div className="text-[14px] font-semibold tnum text-ink">
+              {currency(latest.balance)}
+            </div>
+            <div className="mt-0.5 text-[10px] text-ink/45 tnum">
+              {percent(progressPct)} of gate · as of {latest.date}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="px-5 pb-5">
+        {points.length < 2 ? (
+          <div className="rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
+            {points.length === 0
+              ? 'No HYSA reconciliation periods yet. Run the '
+              : 'Only one HYSA reconciliation period so far. Run the '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              reconcile_periods
+            </code>{' '}
+            MCP tool against the Ally HYSA monthly statements to populate the
+            trajectory.
+          </div>
+        ) : (
+          <>
+            <HysaChart trajectory={trajectory} />
+            <HysaProjectionSummary trajectory={trajectory} />
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function HysaProjectionSummary({ trajectory }: { trajectory: HysaTrajectory }) {
+  const { projection, targetAmount } = trajectory;
+  if (!projection) {
+    return (
+      <p className="mt-3 text-[11px] leading-relaxed text-ink/55">
+        Need at least two periods to project a gate date.
+      </p>
+    );
+  }
+  if (projection.gateDate === null) {
+    return (
+      <p className="mt-3 text-[11px] leading-relaxed text-ember">
+        Trajectory is flat or shrinking ({currency(projection.dailyRate * 30)} / month) — the
+        gate is not reachable on the current trend.
+      </p>
+    );
+  }
+  const monthly = projection.dailyRate * 30;
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-3 text-[11px] sm:grid-cols-3">
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+          Projected gate date
+        </div>
+        <div className="mt-0.5 text-[13px] font-semibold text-ink">
+          {formatGateDate(projection.gateDate)}
+        </div>
+        <div className="mt-0.5 text-[10px] text-ink/45 tnum">{projection.gateDate}</div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+          Implied monthly add
+        </div>
+        <div className="mt-0.5 text-[13px] font-semibold text-ink tnum">
+          {monthly >= 0 ? '+' : ''}
+          {currency(monthly)}
+        </div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+          Gate target
+        </div>
+        <div className="mt-0.5 text-[13px] font-semibold text-ink tnum">
+          {currency(targetAmount)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HysaChart({ trajectory }: { trajectory: HysaTrajectory }) {
+  const { points, targetAmount, projection } = trajectory;
+  if (points.length < 2) return null;
+
+  const firstTs = Date.parse(`${points[0].date}T00:00:00Z`);
+  const lastObservedTs = Date.parse(`${points[points.length - 1].date}T00:00:00Z`);
+  const projectedTs = projection?.gateDate
+    ? Date.parse(`${projection.gateDate}T00:00:00Z`)
+    : null;
+  const lastTs = projectedTs && projectedTs > lastObservedTs ? projectedTs : lastObservedTs;
+  const tsRange = Math.max(1, lastTs - firstTs);
+
+  const maxBalance = Math.max(targetAmount, ...points.map((p) => p.balance));
+  // Round up to a tidy axis ceiling.
+  const chartCeiling = Math.ceil(maxBalance / 10_000) * 10_000;
+  const chartMin = 0;
+  const chartRange = chartCeiling - chartMin;
+
+  const innerWidth = HYSA_CHART_WIDTH - HYSA_CHART_PADDING.left - HYSA_CHART_PADDING.right;
+  const innerHeight = HYSA_CHART_HEIGHT - HYSA_CHART_PADDING.top - HYSA_CHART_PADDING.bottom;
+
+  const xForTs = (ts: number) =>
+    HYSA_CHART_PADDING.left + ((ts - firstTs) / tsRange) * innerWidth;
+  const yForBalance = (balance: number) =>
+    HYSA_CHART_PADDING.top + (1 - (balance - chartMin) / chartRange) * innerHeight;
+
+  const actualPath = points
+    .map((p, i) => {
+      const ts = Date.parse(`${p.date}T00:00:00Z`);
+      const command = i === 0 ? 'M' : 'L';
+      return `${command}${xForTs(ts).toFixed(2)},${yForBalance(p.balance).toFixed(2)}`;
+    })
+    .join(' ');
+
+  const targetY = yForBalance(targetAmount);
+
+  const projectionPath =
+    projection && projection.gateDate && projectedTs && projectedTs > lastObservedTs
+      ? `M${xForTs(lastObservedTs).toFixed(2)},${yForBalance(points[points.length - 1].balance).toFixed(2)} L${xForTs(projectedTs).toFixed(2)},${targetY.toFixed(2)}`
+      : null;
+
+  const yTicks = [chartCeiling, chartCeiling * 0.75, chartCeiling * 0.5, chartCeiling * 0.25, 0];
+
+  return (
+    <div className="overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${HYSA_CHART_WIDTH} ${HYSA_CHART_HEIGHT}`}
+        className="block w-full min-w-[560px]"
+        role="img"
+        aria-label="HYSA balance trajectory chart"
+      >
+        {/* Y-axis gridlines + labels */}
+        {yTicks.map((tick) => {
+          const y = yForBalance(tick);
+          return (
+            <g key={tick}>
+              <line
+                x1={HYSA_CHART_PADDING.left}
+                x2={HYSA_CHART_WIDTH - HYSA_CHART_PADDING.right}
+                y1={y}
+                y2={y}
+                stroke="rgba(15,23,42,0.06)"
+                strokeWidth={1}
+              />
+              <text
+                x={HYSA_CHART_PADDING.left - 6}
+                y={y + 3}
+                textAnchor="end"
+                className="fill-ink/45 text-[10px] tnum"
+              >
+                ${Math.round(tick / 1000)}k
+              </text>
+            </g>
+          );
+        })}
+
+        {/* $80K gate horizontal line */}
+        <line
+          x1={HYSA_CHART_PADDING.left}
+          x2={HYSA_CHART_WIDTH - HYSA_CHART_PADDING.right}
+          y1={targetY}
+          y2={targetY}
+          stroke="rgba(212,131,55,0.5)"
+          strokeDasharray="4 4"
+          strokeWidth={1}
+        />
+        <text
+          x={HYSA_CHART_WIDTH - HYSA_CHART_PADDING.right - 4}
+          y={targetY - 4}
+          textAnchor="end"
+          className="fill-clay text-[10px] font-medium tnum"
+        >
+          {currency(targetAmount)} gate
+        </text>
+
+        {/* Projection segment (dashed) */}
+        {projectionPath ? (
+          <path
+            d={projectionPath}
+            fill="none"
+            stroke="rgba(85,107,47,0.5)"
+            strokeDasharray="5 4"
+            strokeWidth={2}
+          />
+        ) : null}
+
+        {/* Actual trajectory line */}
+        <path d={actualPath} fill="none" stroke="rgb(85,107,47)" strokeWidth={2} />
+
+        {/* Data points */}
+        {points.map((p) => {
+          const ts = Date.parse(`${p.date}T00:00:00Z`);
+          return (
+            <circle
+              key={p.date}
+              cx={xForTs(ts)}
+              cy={yForBalance(p.balance)}
+              r={3}
+              className="fill-moss"
+            >
+              <title>{`${p.date}: ${currency(p.balance)}`}</title>
+            </circle>
+          );
+        })}
+
+        {/* Projected gate marker */}
+        {projection?.gateDate && projectedTs && projectedTs > lastObservedTs ? (
+          <circle
+            cx={xForTs(projectedTs)}
+            cy={targetY}
+            r={4}
+            className="fill-clay"
+          >
+            <title>{`Projected gate: ${projection.gateDate}`}</title>
+          </circle>
+        ) : null}
+
+        {/* X-axis labels: first and last observed dates, plus projection */}
+        <text
+          x={xForTs(firstTs)}
+          y={HYSA_CHART_HEIGHT - 6}
+          textAnchor="start"
+          className="fill-ink/55 text-[10px] tnum"
+        >
+          {points[0].date}
+        </text>
+        <text
+          x={xForTs(lastObservedTs)}
+          y={HYSA_CHART_HEIGHT - 6}
+          textAnchor="middle"
+          className="fill-ink/55 text-[10px] tnum"
+        >
+          {points[points.length - 1].date}
+        </text>
+        {projection?.gateDate && projectedTs && projectedTs > lastObservedTs ? (
+          <text
+            x={xForTs(projectedTs)}
+            y={HYSA_CHART_HEIGHT - 6}
+            textAnchor="end"
+            className="fill-clay text-[10px] tnum"
+          >
+            {projection.gateDate}
+          </text>
+        ) : null}
+      </svg>
+    </div>
+  );
+}
+
+// ── Subscription audit ───────────────────────────────────────────────────────
+
+const HOUSEHOLD_ROLE_STYLES: Record<string, string> = {
+  jeff: 'bg-tide/12 text-tide',
+  ashley: 'bg-clay/14 text-clay',
+  joint: 'bg-moss/12 text-moss',
+};
+
+function subscriptionTotalBurn(entries: SubscriptionAuditEntry[]): number {
+  return entries.reduce((total, entry) => total + entry.monthlyBurn, 0);
+}
+
+function SubscriptionAuditSection({ entries }: { entries: SubscriptionAuditEntry[] }) {
+  const totalBurn = subscriptionTotalBurn(entries);
+  return (
+    <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Subscriptions / app audit
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            Recurring software & streaming charges
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Sourced from classified <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">fixed_obligation</code> outflows with subcategory{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">subscriptions_apps</code> or{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">streaming</code>. Ordered by monthly burn; reclassify in the register to remove a row.
+          </p>
+        </div>
+        {entries.length > 0 ? (
+          <div className="shrink-0 rounded-lg bg-ink/[0.04] px-3 py-1.5 text-right">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+              Monthly burn
+            </div>
+            <div className="text-[14px] font-semibold tnum text-ink">
+              {currency(totalBurn)}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {entries.length === 0 ? (
+        <div className="px-5 pb-5">
+          <div className="rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
+            No recurring software or streaming charges classified yet. Build
+            classifier rules with subcategory{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              subscriptions_apps
+            </code>{' '}
+            or{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              streaming
+            </code>{' '}
+            via the{' '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              upsert_classification_rule
+            </code>{' '}
+            MCP tool.
+          </div>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-[12px]">
+            <thead>
+              <tr className="border-y border-ink/8 bg-paper/60 text-left text-[10px] font-medium uppercase tracking-[0.14em] text-ink/45">
+                <th className="px-4 py-2">Merchant</th>
+                <th className="px-4 py-2">Owner</th>
+                <th className="px-4 py-2 text-right">Charges</th>
+                <th className="px-4 py-2 text-right">Months</th>
+                <th className="px-4 py-2 text-right">Avg / charge</th>
+                <th className="px-4 py-2 text-right">Monthly burn</th>
+                <th className="w-[100px] px-4 py-2">Last charged</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink/[0.05]">
+              {entries.map((entry) => (
+                <SubscriptionAuditRow
+                  key={`${entry.merchant}|${entry.subcategory ?? ''}|${entry.householdRole ?? ''}`}
+                  entry={entry}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SubscriptionAuditRow({ entry }: { entry: SubscriptionAuditEntry }) {
+  const role = entry.householdRole?.toLowerCase() ?? null;
+  const roleClass = role ? HOUSEHOLD_ROLE_STYLES[role] ?? 'bg-ink/[0.05] text-ink/60' : 'bg-ink/[0.05] text-ink/45';
+  return (
+    <tr className="hover:bg-paper/40 transition-colors">
+      <td className="px-4 py-2.5 text-ink">
+        <div className="max-w-[260px] truncate font-medium">{entry.merchant}</div>
+        {entry.subcategory ? (
+          <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink/45">
+            {entry.subcategory}
+          </div>
+        ) : null}
+      </td>
+      <td className="px-4 py-2.5">
+        <span
+          className={cn(
+            'inline-block rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em]',
+            roleClass,
+          )}
+        >
+          {role ?? 'unassigned'}
+        </span>
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right tnum text-ink/65">
+        {entry.chargeCount}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right tnum text-ink/65">
+        {entry.monthCount}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right font-medium tnum text-ink">
+        {currency(entry.avgAmount)}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tnum text-ink">
+        {currency(entry.monthlyBurn)}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-[11px] tnum text-ink/55">
+        {entry.lastChargedOn}
+      </td>
+    </tr>
   );
 }
 
