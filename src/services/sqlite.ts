@@ -1,5 +1,6 @@
 import type {
   CashFlowMonth,
+  DashboardRange,
   DashboardSnapshot,
   LeakageCategory,
   LiquidityGate,
@@ -258,7 +259,7 @@ function monthLabel(month: string): string {
   return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][idx];
 }
 
-export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
+export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promise<DashboardSnapshot> {
   await bootstrapLocalDatabase();
 
   const database = await getDatabase();
@@ -268,11 +269,20 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     return { ...dashboardMock };
   }
 
+  // Build the WHERE clause for the monthly query based on the requested range.
+  // All values are controlled constants — no user input reaches the SQL string.
+  const monthlyWhere =
+    range === 'ytd'
+      ? "WHERE month >= strftime('%Y', 'now') || '-01'"
+      : range === '12mo'
+        ? "WHERE month >= strftime('%Y-%m', date('now', '-11 months'))"
+        : '';
+
   const monthlyRows = await database.select<MonthlyRow>(
     `SELECT month, inflow, outflow
        FROM monthly_cashflow_summary
-       ORDER BY month ASC
-       LIMIT 12`,
+       ${monthlyWhere}
+       ORDER BY month ASC`,
   );
 
   const months: CashFlowMonth[] = monthlyRows.map((row) => ({
@@ -378,11 +388,14 @@ export const TRANSACTION_PAGE_SIZE = 50;
 interface TxRow {
   id: string;
   occurred_on: string;
+  account_id: string;
   account_label: string;
   description_raw: string;
   merchant_normalized: string | null;
   primary_category: string;
   subcategory: string | null;
+  household_role: string;
+  lifecycle: string;
   amount: number;
   direction: string;
 }
@@ -420,11 +433,14 @@ export async function getTransactionPage(filter: {
     `SELECT
          t.id,
          t.occurred_on,
+         t.account_id,
          (a.institution || ' · ' || a.account_name) AS account_label,
          t.description_raw,
          t.merchant_normalized,
          t.primary_category,
          t.subcategory,
+         t.household_role,
+         t.lifecycle,
          t.amount,
          t.direction
        FROM transactions t
@@ -438,14 +454,142 @@ export async function getTransactionPage(filter: {
   const mapped: Transaction[] = rows.map((r) => ({
     id: r.id,
     occurredOn: r.occurred_on,
+    accountId: r.account_id,
     accountLabel: r.account_label,
     descriptionRaw: r.description_raw,
     merchantNormalized: r.merchant_normalized,
     primaryCategory: r.primary_category,
     subcategory: r.subcategory,
+    householdRole: r.household_role,
+    lifecycle: r.lifecycle,
     amount: r.amount,
     direction: r.direction as Transaction['direction'],
   }));
 
   return { rows: mapped, total, page: filter.page, pageSize: TRANSACTION_PAGE_SIZE };
+}
+
+// ── Transaction override ─────────────────────────────────────────────────────
+
+export interface UpsertTransactionOverrideParams {
+  /** `transactions.id` of the row being overridden. */
+  transactionId: string;
+  /** Must be present on the `Transaction` object returned by getTransactionPage. */
+  accountId: string;
+  occurredOn: string;
+  amount: number;
+  descriptionRaw: string;
+  merchantNormalized?: string | null;
+  primaryCategory?: string | null;
+  subcategory?: string | null;
+  householdRole?: string | null;
+  lifecycle?: string | null;
+  note?: string;
+}
+
+/**
+ * Normalise a raw description the same way the Python backend does before
+ * hashing: collapse all whitespace to single spaces and lower-case.
+ */
+function normalizeOverrideDescription(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Compute the 24-hex-char match key used by `transaction_overrides`.
+ * Algorithm mirrors Python: SHA-256 of "{account_id}|{occurred_on}|{amount_2dp}|{normalized_desc}",
+ * truncated to the first 24 hex characters.
+ */
+async function computeOverrideMatchKey(
+  accountId: string,
+  occurredOn: string,
+  amount: number,
+  descriptionRaw: string,
+): Promise<string> {
+  const amountStr = amount.toFixed(2);
+  const normalized = normalizeOverrideDescription(descriptionRaw);
+  const payload = `${accountId}|${occurredOn}|${amountStr}|${normalized}`;
+
+  const encoded = new TextEncoder().encode(payload);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+  const hex = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hex.slice(0, 24);
+}
+
+function newUuid(): string {
+  // crypto.randomUUID is available in secure contexts (Tauri webview qualifies).
+  return crypto.randomUUID();
+}
+
+export async function upsertTransactionOverride(
+  params: UpsertTransactionOverrideParams,
+): Promise<void> {
+  const database = await getDatabase();
+  if (!database) return;
+
+  const matchKey = await computeOverrideMatchKey(
+    params.accountId,
+    params.occurredOn,
+    params.amount,
+    params.descriptionRaw,
+  );
+
+  // Persist the override row.
+  await database.execute(
+    `INSERT INTO transaction_overrides (
+       id, match_key, account_id, occurred_on, amount, description_raw,
+       merchant_normalized, primary_category, subcategory,
+       household_role, lifecycle, note
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     ON CONFLICT(match_key) DO UPDATE SET
+       merchant_normalized = COALESCE($7, transaction_overrides.merchant_normalized),
+       primary_category    = COALESCE($8, transaction_overrides.primary_category),
+       subcategory         = COALESCE($9, transaction_overrides.subcategory),
+       household_role      = COALESCE($10, transaction_overrides.household_role),
+       lifecycle           = COALESCE($11, transaction_overrides.lifecycle),
+       note                = CASE
+                               WHEN $12 <> '' THEN $12
+                               ELSE transaction_overrides.note
+                             END,
+       updated_at          = CURRENT_TIMESTAMP`,
+    [
+      newUuid(),
+      matchKey,
+      params.accountId,
+      params.occurredOn,
+      params.amount,
+      params.descriptionRaw,
+      params.merchantNormalized ?? null,
+      params.primaryCategory ?? null,
+      params.subcategory ?? null,
+      params.householdRole ?? null,
+      params.lifecycle ?? null,
+      params.note ?? '',
+    ],
+  );
+
+  // Apply the stored override back to any matching transactions.
+  // Only non-null fields from the override replace transaction values.
+  await database.execute(
+    `UPDATE transactions
+        SET merchant_normalized = COALESCE(
+              (SELECT merchant_normalized FROM transaction_overrides WHERE match_key = $1),
+              merchant_normalized),
+            primary_category    = COALESCE(
+              (SELECT primary_category FROM transaction_overrides WHERE match_key = $1),
+              primary_category),
+            subcategory         = COALESCE(
+              (SELECT subcategory FROM transaction_overrides WHERE match_key = $1),
+              subcategory),
+            household_role      = COALESCE(
+              (SELECT household_role FROM transaction_overrides WHERE match_key = $1),
+              household_role),
+            lifecycle           = COALESCE(
+              (SELECT lifecycle FROM transaction_overrides WHERE match_key = $1),
+              lifecycle)
+      WHERE id = $2`,
+    [matchKey, params.transactionId],
+  );
 }

@@ -87,6 +87,9 @@ def financial_detective(
         "4. To improve classification, call list_classification_rules, upsert_classification_rule "
         "(pattern → primary_category, subcategory, merchant_normalized, household_role, lifecycle), "
         "then apply_classifier. For one-off corrections that survive re-imports, use upsert_transaction_override.\n"
+        "   If you have already parsed a batch of transactions outside of ingest_documents (e.g. from a "
+        "custom ad-hoc parser), use reconcile_transactions to write them directly; it accepts the same "
+        "ParsedTransaction structure and applies stored overrides automatically.\n"
         "5. Use query_cashflow_data for read-only verification, monthly summaries, merchant and category review, "
         "recurring-charge review, and anomaly checks.\n"
         "6. Ask for additional source accounts only when coverage is incomplete or a material gap remains.\n"
@@ -102,6 +105,36 @@ def read_document_metadata(folder_path: str | None = None) -> dict:
 
 @mcp.tool()
 def reconcile_transactions(request: dict) -> dict:
+    """Persist a batch of pre-parsed transactions into the local database.
+
+    Use this tool when you have already built structured ``ParsedTransaction``
+    objects (e.g. from a custom or ad-hoc parser) and want to write them
+    directly — bypassing the file-watcher and the built-in parsers used by
+    ``ingest_documents``.
+
+    Required keys inside *request*:
+
+    - ``source_name`` (str): Human-readable label for the data source
+      (e.g. ``"Chase Checking 2024-01"``).
+    - ``transactions`` (list): Each item must include ``account``,
+      ``occurred_on``, ``description_raw``, ``amount``, ``direction``,
+      ``primary_category``, ``source_record_key``, and
+      ``source_document_name``.
+
+    Optional keys:
+
+    - ``parser_version`` (str, default ``"claude-cowork"``): Version tag
+      stored alongside the import batch for audit purposes.
+    - ``dry_run`` (bool, default ``false``): When ``true``, reports what
+      would be inserted or updated without writing anything.
+
+    Each transaction is matched against existing ``transaction_overrides``
+    before being written, so manual corrections applied earlier survive
+    re-imports automatically.
+
+    Returns counts of inserted and updated rows (or ``would_insert`` /
+    ``would_update`` in dry-run mode).
+    """
     parsed_request = ReconcileTransactionsRequest.model_validate(request)
     return reconcile_transactions_impl(database, parsed_request).model_dump()
 
