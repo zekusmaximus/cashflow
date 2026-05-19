@@ -18,6 +18,30 @@ export interface LeakageCategory {
   cap: number;
 }
 
+export interface HysaTrajectoryPoint {
+  /** Period-end date in YYYY-MM-DD form. */
+  date: string;
+  /** Closing balance at the end of that period, in dollars. */
+  balance: number;
+}
+
+export interface HysaProjection {
+  /** Slope of the linear fit in dollars per day. */
+  dailyRate: number;
+  /** Projected gate-crossing date in YYYY-MM-DD form. `null` if the slope is non-positive. */
+  gateDate: string | null;
+  /** Target balance the projection is solved against. */
+  targetAmount: number;
+}
+
+export interface HysaTrajectory {
+  points: HysaTrajectoryPoint[];
+  /** Master-index §9 target — the $80K gate before 2027 Roth re-engagement. */
+  targetAmount: number;
+  projection: HysaProjection | null;
+  accountLabel: string | null;
+}
+
 export interface SubscriptionAuditEntry {
   merchant: string;
   subcategory: string | null;
@@ -49,6 +73,7 @@ export interface DashboardSnapshot {
   leakageCategories: LeakageCategory[];
   reconciliations: ReconciliationPeriod[];
   subscriptionAudit: SubscriptionAuditEntry[];
+  hysaTrajectory: HysaTrajectory;
 }
 
 export interface Transaction {

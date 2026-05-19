@@ -12,6 +12,7 @@ import type {
   CashFlowMonth,
   DashboardRange,
   DashboardSnapshot,
+  HysaTrajectory,
   LeakageCategory,
   LiquidityGate,
   ReconciliationPeriod,
@@ -67,8 +68,14 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
     );
   }
 
-  const { months, gates, leakageCategories, reconciliations, subscriptionAudit } =
-    query.data;
+  const {
+    months,
+    gates,
+    leakageCategories,
+    reconciliations,
+    subscriptionAudit,
+    hysaTrajectory,
+  } = query.data;
   const totalInflow = months.reduce((total, m) => total + m.inflow, 0);
   const totalOutflow = months.reduce((total, m) => total + m.outflow, 0);
   const netYtd = totalInflow - totalOutflow;
@@ -154,6 +161,8 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
         <CashFlowChart months={months} chartMax={chartMax} yAxisLabels={yAxisLabels} />
         <GatesPanel gates={gates} />
       </div>
+
+      <HysaTrajectorySection trajectory={hysaTrajectory} />
 
       <ReconciliationSection periods={reconciliations} />
 
@@ -827,6 +836,303 @@ function LeakageCard({ category }: { category: LeakageCategory }) {
           {overage ? <span className="text-ember"> · +{currency(overBy)} over</span> : null}
         </span>
       </div>
+    </div>
+  );
+}
+
+// ── HYSA trajectory ──────────────────────────────────────────────────────────
+
+const HYSA_CHART_WIDTH = 800;
+const HYSA_CHART_HEIGHT = 220;
+const HYSA_CHART_PADDING = { top: 16, right: 16, bottom: 28, left: 56 };
+
+function formatGateDate(iso: string): string {
+  // YYYY-MM-DD → "May 2026"
+  const ts = Date.parse(`${iso}T00:00:00Z`);
+  if (Number.isNaN(ts)) return iso;
+  return new Date(ts).toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function HysaTrajectorySection({ trajectory }: { trajectory: HysaTrajectory }) {
+  const { points, targetAmount, accountLabel } = trajectory;
+  const latest = points[points.length - 1] ?? null;
+  const progressPct = latest
+    ? Math.min(1, Math.max(0, latest.balance / targetAmount))
+    : 0;
+
+  return (
+    <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            HYSA trajectory
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            {accountLabel ?? 'High-yield savings'} progress toward {currency(targetAmount)} gate
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Sourced from <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[10px] text-ink/75">reconciliation_periods</code>{' '}
+            closing balances. Projection is a least-squares linear fit;
+            extrapolation assumes the same monthly trajectory holds.
+          </p>
+        </div>
+        {latest ? (
+          <div className="shrink-0 rounded-lg bg-ink/[0.04] px-3 py-1.5 text-right">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+              Latest balance
+            </div>
+            <div className="text-[14px] font-semibold tnum text-ink">
+              {currency(latest.balance)}
+            </div>
+            <div className="mt-0.5 text-[10px] text-ink/45 tnum">
+              {percent(progressPct)} of gate · as of {latest.date}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="px-5 pb-5">
+        {points.length < 2 ? (
+          <div className="rounded-lg border border-dashed border-ink/15 bg-paper/40 p-4 text-[12px] leading-relaxed text-ink/55">
+            {points.length === 0
+              ? 'No HYSA reconciliation periods yet. Run the '
+              : 'Only one HYSA reconciliation period so far. Run the '}
+            <code className="rounded bg-ink/[0.06] px-1 py-0.5 text-[11px] text-ink/75">
+              reconcile_periods
+            </code>{' '}
+            MCP tool against the Ally HYSA monthly statements to populate the
+            trajectory.
+          </div>
+        ) : (
+          <>
+            <HysaChart trajectory={trajectory} />
+            <HysaProjectionSummary trajectory={trajectory} />
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function HysaProjectionSummary({ trajectory }: { trajectory: HysaTrajectory }) {
+  const { projection, targetAmount } = trajectory;
+  if (!projection) {
+    return (
+      <p className="mt-3 text-[11px] leading-relaxed text-ink/55">
+        Need at least two periods to project a gate date.
+      </p>
+    );
+  }
+  if (projection.gateDate === null) {
+    return (
+      <p className="mt-3 text-[11px] leading-relaxed text-ember">
+        Trajectory is flat or shrinking ({currency(projection.dailyRate * 30)} / month) — the
+        gate is not reachable on the current trend.
+      </p>
+    );
+  }
+  const monthly = projection.dailyRate * 30;
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-3 text-[11px] sm:grid-cols-3">
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+          Projected gate date
+        </div>
+        <div className="mt-0.5 text-[13px] font-semibold text-ink">
+          {formatGateDate(projection.gateDate)}
+        </div>
+        <div className="mt-0.5 text-[10px] text-ink/45 tnum">{projection.gateDate}</div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+          Implied monthly add
+        </div>
+        <div className="mt-0.5 text-[13px] font-semibold text-ink tnum">
+          {monthly >= 0 ? '+' : ''}
+          {currency(monthly)}
+        </div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
+          Gate target
+        </div>
+        <div className="mt-0.5 text-[13px] font-semibold text-ink tnum">
+          {currency(targetAmount)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HysaChart({ trajectory }: { trajectory: HysaTrajectory }) {
+  const { points, targetAmount, projection } = trajectory;
+  if (points.length < 2) return null;
+
+  const firstTs = Date.parse(`${points[0].date}T00:00:00Z`);
+  const lastObservedTs = Date.parse(`${points[points.length - 1].date}T00:00:00Z`);
+  const projectedTs = projection?.gateDate
+    ? Date.parse(`${projection.gateDate}T00:00:00Z`)
+    : null;
+  const lastTs = projectedTs && projectedTs > lastObservedTs ? projectedTs : lastObservedTs;
+  const tsRange = Math.max(1, lastTs - firstTs);
+
+  const maxBalance = Math.max(targetAmount, ...points.map((p) => p.balance));
+  // Round up to a tidy axis ceiling.
+  const chartCeiling = Math.ceil(maxBalance / 10_000) * 10_000;
+  const chartMin = 0;
+  const chartRange = chartCeiling - chartMin;
+
+  const innerWidth = HYSA_CHART_WIDTH - HYSA_CHART_PADDING.left - HYSA_CHART_PADDING.right;
+  const innerHeight = HYSA_CHART_HEIGHT - HYSA_CHART_PADDING.top - HYSA_CHART_PADDING.bottom;
+
+  const xForTs = (ts: number) =>
+    HYSA_CHART_PADDING.left + ((ts - firstTs) / tsRange) * innerWidth;
+  const yForBalance = (balance: number) =>
+    HYSA_CHART_PADDING.top + (1 - (balance - chartMin) / chartRange) * innerHeight;
+
+  const actualPath = points
+    .map((p, i) => {
+      const ts = Date.parse(`${p.date}T00:00:00Z`);
+      const command = i === 0 ? 'M' : 'L';
+      return `${command}${xForTs(ts).toFixed(2)},${yForBalance(p.balance).toFixed(2)}`;
+    })
+    .join(' ');
+
+  const targetY = yForBalance(targetAmount);
+
+  const projectionPath =
+    projection && projection.gateDate && projectedTs && projectedTs > lastObservedTs
+      ? `M${xForTs(lastObservedTs).toFixed(2)},${yForBalance(points[points.length - 1].balance).toFixed(2)} L${xForTs(projectedTs).toFixed(2)},${targetY.toFixed(2)}`
+      : null;
+
+  const yTicks = [chartCeiling, chartCeiling * 0.75, chartCeiling * 0.5, chartCeiling * 0.25, 0];
+
+  return (
+    <div className="overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${HYSA_CHART_WIDTH} ${HYSA_CHART_HEIGHT}`}
+        className="block w-full min-w-[560px]"
+        role="img"
+        aria-label="HYSA balance trajectory chart"
+      >
+        {/* Y-axis gridlines + labels */}
+        {yTicks.map((tick) => {
+          const y = yForBalance(tick);
+          return (
+            <g key={tick}>
+              <line
+                x1={HYSA_CHART_PADDING.left}
+                x2={HYSA_CHART_WIDTH - HYSA_CHART_PADDING.right}
+                y1={y}
+                y2={y}
+                stroke="rgba(15,23,42,0.06)"
+                strokeWidth={1}
+              />
+              <text
+                x={HYSA_CHART_PADDING.left - 6}
+                y={y + 3}
+                textAnchor="end"
+                className="fill-ink/45 text-[10px] tnum"
+              >
+                ${Math.round(tick / 1000)}k
+              </text>
+            </g>
+          );
+        })}
+
+        {/* $80K gate horizontal line */}
+        <line
+          x1={HYSA_CHART_PADDING.left}
+          x2={HYSA_CHART_WIDTH - HYSA_CHART_PADDING.right}
+          y1={targetY}
+          y2={targetY}
+          stroke="rgba(212,131,55,0.5)"
+          strokeDasharray="4 4"
+          strokeWidth={1}
+        />
+        <text
+          x={HYSA_CHART_WIDTH - HYSA_CHART_PADDING.right - 4}
+          y={targetY - 4}
+          textAnchor="end"
+          className="fill-clay text-[10px] font-medium tnum"
+        >
+          {currency(targetAmount)} gate
+        </text>
+
+        {/* Projection segment (dashed) */}
+        {projectionPath ? (
+          <path
+            d={projectionPath}
+            fill="none"
+            stroke="rgba(85,107,47,0.5)"
+            strokeDasharray="5 4"
+            strokeWidth={2}
+          />
+        ) : null}
+
+        {/* Actual trajectory line */}
+        <path d={actualPath} fill="none" stroke="rgb(85,107,47)" strokeWidth={2} />
+
+        {/* Data points */}
+        {points.map((p) => {
+          const ts = Date.parse(`${p.date}T00:00:00Z`);
+          return (
+            <circle
+              key={p.date}
+              cx={xForTs(ts)}
+              cy={yForBalance(p.balance)}
+              r={3}
+              className="fill-moss"
+            >
+              <title>{`${p.date}: ${currency(p.balance)}`}</title>
+            </circle>
+          );
+        })}
+
+        {/* Projected gate marker */}
+        {projection?.gateDate && projectedTs && projectedTs > lastObservedTs ? (
+          <circle
+            cx={xForTs(projectedTs)}
+            cy={targetY}
+            r={4}
+            className="fill-clay"
+          >
+            <title>{`Projected gate: ${projection.gateDate}`}</title>
+          </circle>
+        ) : null}
+
+        {/* X-axis labels: first and last observed dates, plus projection */}
+        <text
+          x={xForTs(firstTs)}
+          y={HYSA_CHART_HEIGHT - 6}
+          textAnchor="start"
+          className="fill-ink/55 text-[10px] tnum"
+        >
+          {points[0].date}
+        </text>
+        <text
+          x={xForTs(lastObservedTs)}
+          y={HYSA_CHART_HEIGHT - 6}
+          textAnchor="middle"
+          className="fill-ink/55 text-[10px] tnum"
+        >
+          {points[points.length - 1].date}
+        </text>
+        {projection?.gateDate && projectedTs && projectedTs > lastObservedTs ? (
+          <text
+            x={xForTs(projectedTs)}
+            y={HYSA_CHART_HEIGHT - 6}
+            textAnchor="end"
+            className="fill-clay text-[10px] tnum"
+          >
+            {projection.gateDate}
+          </text>
+        ) : null}
+      </svg>
     </div>
   );
 }

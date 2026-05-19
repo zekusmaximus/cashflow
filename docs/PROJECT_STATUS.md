@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (variance explanation inline edit + reconciliation history drill-down + subscriptions audit card landed)
+**Last updated:** 2026-05-19 (variance explanation inline edit + reconciliation history drill-down + subscriptions audit + HYSA trajectory chart landed)
 
 ## Snapshot
 
@@ -101,15 +101,21 @@ with `list_watch_root_files`. Using a Rust command for the copy keeps the
 watch-root path resolution in one place and avoids broadening the
 `plugin-fs` scope.
 
-**Next focus:** remaining roadmap §6 dashboard cards (HYSA trajectory
-chart, Capital-Plan Feasibility badge). Manual `variance_explanation`
-entry UI, reconciliation history drill-down, and the real-data
-Subscriptions / App Audit card all landed 2026-05-19. The subscriptions
-card is master-index §6 #11, kept distinct from the existing leakage
-card (§6 #6) — the SQL query targets classified outflows with
-subcategory `subscriptions_apps` or `streaming`, aggregates per
-merchant + owner, and reports charge count, distinct months, average
-charge, monthly burn, and last-charged date.
+**Next focus:** the last remaining roadmap §6 card — the Capital-Plan
+Feasibility badge (Green/Yellow/Red). That card depends materially on
+roadmap items 2 (paystub PDF extraction), 3 (normalization layer), and
+4 (forward projection engine), all of which are still pending. A v1
+heuristic badge can ship now using already-available signals: avg
+monthly net cash flow, fixed-burn estimate from the classifier, leakage
+overage totals, and the HYSA gate trajectory.
+
+Manual `variance_explanation` entry UI, reconciliation history
+drill-down, real-data Subscriptions / App Audit card, and the HYSA
+trajectory chart all landed 2026-05-19. The trajectory chart reads
+closing balances from `reconciliation_periods` for `account_type =
+'savings'`, fits a linear-least-squares projection toward the $80K
+gate, and renders an SVG line chart with a dashed projection segment
+and a marker at the projected gate date.
 
 ## Architecture (one-screen reminder)
 
@@ -220,6 +226,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Reconciliation card inline variance-explanation edit: click the explanation (or "+ Add variance explanation" affordance) to open a textarea — Esc cancels, ⌘/Ctrl+Enter saves, blur saves; optimistic React Query update with rollback-on-error; persisted via `updateVarianceExplanation()` keyed by `(account_id, period_start, period_end)`, the same triple `reconcile_periods` preserves across reruns
 - [x] Reconciliation history drill-down: snapshot SQL now returns every period (sorted `period_end DESC` within each account); each card shows the latest period inline plus a "Show N earlier periods" toggle that reveals compact rows for every prior period with its own variance badge and explanation
 - [x] Subscriptions / App Audit card (master index §6 #11) driven from real classifier output: groups outflows whose `primary_category = 'fixed_obligation'` and `subcategory IN ('subscriptions_apps','streaming')` by merchant + owner, reports charge count, distinct months, average charge, monthly burn, last-charged date; ordered by monthly burn DESC with an aggregate burn total in the header
+- [x] HYSA trajectory chart (master index §6 #12): SVG line chart of Ally HYSA closing balances per period, with a linear-least-squares projection toward the $80K gate (master index §9). Reads `COALESCE(statement_closing_balance, computed_closing_balance)` from `reconciliation_periods` for any `account_type = 'savings'` account. Renders gate horizontal line, actual trajectory line, dashed projection segment, projected gate-date marker, latest balance + gate-progress KPI, and a summary block with projected gate date / implied monthly add / gate target. Returns a friendly empty state when fewer than two periods exist. Pure projection helper (`projectHysaGate`) is unit-tested.
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -307,7 +314,12 @@ normal use of the repo for transaction-based spending analysis.
   - Invalidates the `document-checklist` React Query key; "Rescan folder" wired to the same invalidation
   - Disabled outside the Tauri runtime; inline success/error message under the button
   - MCP `read_document_metadata` invocation deferred — Tauri frontend has no path to MCP tools; the existing 5s rescan + Cowork ingestion flow is sufficient
-- [ ] HYSA trajectory chart
+- [x] **HYSA trajectory chart** (2026-05-19)
+  - New full-width section between the cash flow chart row and the reconciliation section (master index §6 #12)
+  - Reads `COALESCE(statement_closing_balance, computed_closing_balance)` per period from `reconciliation_periods` joined to `accounts` where `account_type = 'savings'`
+  - Pure helper `projectHysaGate()` fits a linear-least-squares line in days-since-first-point space and solves for the date when balance reaches the $80K gate; returns `null` gate date when the slope is non-positive, the latest observation date when the target is already reached
+  - SVG chart renders: $80K gate horizontal line, actual trajectory polyline + circle markers, dashed projection segment to the projected gate date, and a colored marker at that projected date
+  - Header carries the latest balance + gate-progress KPI; below the chart sits a 3-column summary (projected gate date / implied monthly add / gate target). Friendly empty state when fewer than two reconciled periods exist.
 - [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
 - [x] **Subscriptions / App Audit card driven from real data** (2026-05-19)
   - New section (master index §6 #11), distinct from the existing leakage card (§6 #6)

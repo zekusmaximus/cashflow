@@ -29,6 +29,21 @@ export const dashboardMock: DashboardSnapshot = {
     { name: 'Pet services and boarding', monthlyBurn: 610, cap: 475 },
     { name: 'Dining and delivery spillover', monthlyBurn: 1240, cap: 900 },
   ],
+  hysaTrajectory: {
+    points: [
+      { date: '2026-01-31', balance: 42100 },
+      { date: '2026-02-28', balance: 43450 },
+      { date: '2026-03-31', balance: 44600 },
+      { date: '2026-04-30', balance: 46200 },
+    ],
+    targetAmount: 80000,
+    projection: {
+      dailyRate: 45,
+      gateDate: '2028-09-15',
+      targetAmount: 80000,
+    },
+    accountLabel: 'Ally · Ally HYSA',
+  },
   subscriptionAudit: [
     {
       merchant: 'OpenAI',
