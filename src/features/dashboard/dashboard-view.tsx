@@ -8,6 +8,11 @@ import {
   type UpdateVarianceExplanationParams,
   type UpsertTransactionOverrideParams,
 } from '../../services/sqlite';
+import {
+  assessCapitalPlanFeasibility,
+  type FeasibilityAssessment,
+  type FeasibilityStatus,
+} from './feasibility';
 import type {
   CashFlowMonth,
   DashboardRange,
@@ -91,6 +96,12 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
   const chartMax = Math.max(20000, Math.ceil(dataMax / 5000) * 5000);
   const yAxisLabels = [chartMax, chartMax * 0.75, chartMax * 0.5, chartMax * 0.25, 0];
 
+  const feasibility = assessCapitalPlanFeasibility(
+    months,
+    hysaTrajectory,
+    leakageCategories,
+  );
+
   return (
     <div>
       <div className="mb-5 flex items-end justify-between gap-4">
@@ -153,6 +164,8 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
           )}
         </KpiTile>
       </div>
+
+      <FeasibilitySection assessment={feasibility} />
 
       <div
         className="grid gap-5"
@@ -837,6 +850,84 @@ function LeakageCard({ category }: { category: LeakageCategory }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// ── Capital-Plan Feasibility ────────────────────────────────────────────────
+
+const FEASIBILITY_BADGE_STYLES: Record<FeasibilityStatus, string> = {
+  green: 'bg-moss/12 text-moss',
+  yellow: 'bg-clay/12 text-clay',
+  red: 'bg-ember/12 text-ember',
+  unknown: 'bg-ink/[0.06] text-ink/55',
+};
+
+const FEASIBILITY_BADGE_LABEL: Record<FeasibilityStatus, string> = {
+  green: 'Green',
+  yellow: 'Yellow',
+  red: 'Red',
+  unknown: 'No signal',
+};
+
+const FEASIBILITY_DOT_STYLES: Record<FeasibilityStatus, string> = {
+  green: 'bg-moss',
+  yellow: 'bg-clay',
+  red: 'bg-ember',
+  unknown: 'bg-ink/25',
+};
+
+function FeasibilitySection({ assessment }: { assessment: FeasibilityAssessment }) {
+  return (
+    <section className="mb-5 rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
+        <div className="min-w-0">
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Capital-plan feasibility · v1 heuristic
+          </div>
+          <div className="mt-0.5 text-[15px] font-semibold text-ink">
+            {assessment.headline}
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-ink/55">
+            Heuristic combination of cash-flow, HYSA gate, and leakage signals.
+            Master-index §10 capital-plan tests (401(k)/HSA/Roth/rental net)
+            need paystub extraction, the normalization layer, and the forward
+            projection engine before they can drive this badge.
+          </p>
+        </div>
+        <span
+          className={cn(
+            'shrink-0 rounded-full px-3 py-1 text-[12px] font-semibold uppercase tracking-[0.16em]',
+            FEASIBILITY_BADGE_STYLES[assessment.status],
+          )}
+        >
+          {FEASIBILITY_BADGE_LABEL[assessment.status]}
+        </span>
+      </div>
+      <ul className="grid grid-cols-1 gap-2 px-5 pb-5 md:grid-cols-3">
+        {assessment.drivers.map((driver) => (
+          <li
+            key={driver.label}
+            className="rounded-lg border border-ink/8 bg-paper/50 p-3"
+          >
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className={cn(
+                  'inline-block h-2 w-2 rounded-full',
+                  FEASIBILITY_DOT_STYLES[driver.status],
+                )}
+              />
+              <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink/55">
+                {driver.label}
+              </span>
+            </div>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-ink/75">
+              {driver.detail}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

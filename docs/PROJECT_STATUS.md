@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (variance explanation inline edit + reconciliation history drill-down + subscriptions audit + HYSA trajectory chart landed)
+**Last updated:** 2026-05-19 (roadmap §6 dashboard build-out closed: variance explanation editor, reconciliation history drill-down, subscriptions audit, HYSA trajectory chart, Capital-Plan Feasibility v1 badge)
 
 ## Snapshot
 
@@ -101,21 +101,17 @@ with `list_watch_root_files`. Using a Rust command for the copy keeps the
 watch-root path resolution in one place and avoids broadening the
 `plugin-fs` scope.
 
-**Next focus:** the last remaining roadmap §6 card — the Capital-Plan
-Feasibility badge (Green/Yellow/Red). That card depends materially on
-roadmap items 2 (paystub PDF extraction), 3 (normalization layer), and
-4 (forward projection engine), all of which are still pending. A v1
-heuristic badge can ship now using already-available signals: avg
-monthly net cash flow, fixed-burn estimate from the classifier, leakage
-overage totals, and the HYSA gate trajectory.
-
-Manual `variance_explanation` entry UI, reconciliation history
-drill-down, real-data Subscriptions / App Audit card, and the HYSA
-trajectory chart all landed 2026-05-19. The trajectory chart reads
-closing balances from `reconciliation_periods` for `account_type =
-'savings'`, fits a linear-least-squares projection toward the $80K
-gate, and renders an SVG line chart with a dashed projection segment
-and a marker at the projected gate date.
+**Next focus:** all five remaining roadmap §6 dashboard cards landed
+2026-05-19 — variance explanation editor, reconciliation history
+drill-down, Subscriptions / App Audit card, HYSA trajectory chart, and
+the Capital-Plan Feasibility v1 badge. The natural next slice is one of
+the still-deferred enrichment layers: roadmap item 2 (paystub PDF
+extraction), 3 (sinking funds + normalized monthly view), or 4 (forward
+projection engine through 12/31/2027). The Capital-Plan Feasibility
+badge currently runs on a v1 heuristic combining cash-flow, HYSA gate,
+and leakage signals; landing items 2-4 would let it drive against
+master-index §10's specific 401(k)/HSA/Roth/rental tests instead of
+coarse heuristics.
 
 ## Architecture (one-screen reminder)
 
@@ -227,6 +223,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Reconciliation history drill-down: snapshot SQL now returns every period (sorted `period_end DESC` within each account); each card shows the latest period inline plus a "Show N earlier periods" toggle that reveals compact rows for every prior period with its own variance badge and explanation
 - [x] Subscriptions / App Audit card (master index §6 #11) driven from real classifier output: groups outflows whose `primary_category = 'fixed_obligation'` and `subcategory IN ('subscriptions_apps','streaming')` by merchant + owner, reports charge count, distinct months, average charge, monthly burn, last-charged date; ordered by monthly burn DESC with an aggregate burn total in the header
 - [x] HYSA trajectory chart (master index §6 #12): SVG line chart of Ally HYSA closing balances per period, with a linear-least-squares projection toward the $80K gate (master index §9). Reads `COALESCE(statement_closing_balance, computed_closing_balance)` from `reconciliation_periods` for any `account_type = 'savings'` account. Renders gate horizontal line, actual trajectory line, dashed projection segment, projected gate-date marker, latest balance + gate-progress KPI, and a summary block with projected gate date / implied monthly add / gate target. Returns a friendly empty state when fewer than two periods exist. Pure projection helper (`projectHysaGate`) is unit-tested.
+- [x] Capital-Plan Feasibility v1 badge (master index §6 #13 + §9): full-width card at the top of the dashboard with a Green/Yellow/Red badge plus three driver tiles (monthly net cash flow, HYSA gate trajectory, leakage overage). Overall status is the worst of the drivers. Heuristic combines already-available signals — master-index §10 (401(k)/HSA/Roth/rental net) tests still need paystub extraction, normalization, and forward projection (roadmap items 2-4) before they can drive the badge. Pure `assessCapitalPlanFeasibility` helper is unit-tested across the Green / Yellow / Red / unknown transitions.
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -320,7 +317,13 @@ normal use of the repo for transaction-based spending analysis.
   - Pure helper `projectHysaGate()` fits a linear-least-squares line in days-since-first-point space and solves for the date when balance reaches the $80K gate; returns `null` gate date when the slope is non-positive, the latest observation date when the target is already reached
   - SVG chart renders: $80K gate horizontal line, actual trajectory polyline + circle markers, dashed projection segment to the projected gate date, and a colored marker at that projected date
   - Header carries the latest balance + gate-progress KPI; below the chart sits a 3-column summary (projected gate date / implied monthly add / gate target). Friendly empty state when fewer than two reconciled periods exist.
-- [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
+- [x] **Capital-Plan Feasibility card with Green/Yellow/Red badge** (2026-05-19, v1 heuristic)
+  - New full-width card at the top of the dashboard (master index §6 #13 + §9 status definitions)
+  - Pure helper `assessCapitalPlanFeasibility()` blends three drivers: monthly net cash flow (avg / month), HYSA gate trajectory (months-to-gate vs. 2027 Roth target), and leakage overage (sum across cap-tracked categories)
+  - Each driver gets its own Green/Yellow/Red/unknown status with an explanatory detail line; the overall badge is the worst of the drivers
+  - Headline copy mirrors the §9 status definitions verbatim
+  - Card is explicitly labeled "v1 heuristic"; the master-index §10 capital-plan tests (401(k)/HSA/Roth/rental net) remain blocked on roadmap items 2 (paystub extraction), 3 (normalization), and 4 (forward projection engine)
+  - Status transitions covered by 6 unit tests (all-green, HYSA-driven Yellow, negative-net-flow Red, flat-trajectory Red, all-unknown empty state, heavy-leakage Red)
 - [x] **Subscriptions / App Audit card driven from real data** (2026-05-19)
   - New section (master index §6 #11), distinct from the existing leakage card (§6 #6)
   - SQL aggregates outflows whose `primary_category = 'fixed_obligation'` and `subcategory IN ('subscriptions_apps','streaming')`, grouped by `merchant_normalized` + `subcategory` + `household_role`
