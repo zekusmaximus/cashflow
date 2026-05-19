@@ -3,7 +3,9 @@ import { useMutation, useQueryClient, type UseQueryResult } from '@tanstack/reac
 import { cn, currency, percent } from '../../lib/utils';
 import { useTransactionRegister } from '../../hooks/use-transaction-register';
 import {
+  updateVarianceExplanation,
   upsertTransactionOverride,
+  type UpdateVarianceExplanationParams,
   type UpsertTransactionOverrideParams,
 } from '../../services/sqlite';
 import type {
@@ -259,12 +261,154 @@ function ReconciliationCard({ period }: { period: ReconciliationPeriod }) {
         </p>
       ) : null}
 
-      {period.varianceExplanation ? (
-        <p className="mt-2 text-[11px] italic leading-relaxed text-ink/65">
-          {period.varianceExplanation}
-        </p>
-      ) : null}
+      <VarianceExplanationEditor period={period} />
     </div>
+  );
+}
+
+function VarianceExplanationEditor({ period }: { period: ReconciliationPeriod }) {
+  const queryClient = useQueryClient();
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(period.varianceExplanation);
+
+  const mutation = useMutation({
+    mutationFn: (params: UpdateVarianceExplanationParams) =>
+      updateVarianceExplanation(params),
+    onMutate: async (params) => {
+      await queryClient.cancelQueries({ queryKey: ['dashboard-snapshot'] });
+      const previous = queryClient.getQueriesData<DashboardSnapshot>({
+        queryKey: ['dashboard-snapshot'],
+      });
+      queryClient.setQueriesData<DashboardSnapshot>(
+        { queryKey: ['dashboard-snapshot'] },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            reconciliations: old.reconciliations.map((r) =>
+              r.accountId === params.accountId &&
+              r.periodStart === params.periodStart &&
+              r.periodEnd === params.periodEnd
+                ? { ...r, varianceExplanation: params.explanation }
+                : r,
+            ),
+          };
+        },
+      );
+      return { previous };
+    },
+    onError: (_err, _params, context) => {
+      if (!context?.previous) return;
+      for (const [key, data] of context.previous) {
+        queryClient.setQueryData(key, data);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard-snapshot'] });
+    },
+  });
+
+  const startEdit = () => {
+    setDraft(period.varianceExplanation);
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setDraft(period.varianceExplanation);
+  };
+
+  const saveEdit = () => {
+    const trimmed = draft.trim();
+    if (trimmed === period.varianceExplanation.trim()) {
+      setIsEditing(false);
+      return;
+    }
+    mutation.mutate({
+      accountId: period.accountId,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      explanation: trimmed,
+    });
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Multi-line note: Enter inserts newline; Ctrl/Cmd+Enter saves; Esc cancels.
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelEdit();
+    } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      saveEdit();
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <div className="mt-2">
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={saveEdit}
+          placeholder="Explain the variance (e.g. timing of a pending charge, statement cut date drift)…"
+          rows={3}
+          className="w-full rounded border border-tide/50 bg-white px-2 py-1 text-[11px] leading-relaxed text-ink outline-none focus:border-tide"
+          aria-label="Edit variance explanation"
+        />
+        <div className="mt-1 flex items-center justify-between text-[10px] text-ink/45">
+          <span>Esc cancels · ⌘/Ctrl+Enter saves · blur saves</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onMouseDown={(event) => {
+                // Prevent the textarea's onBlur from firing before this click.
+                event.preventDefault();
+                cancelEdit();
+              }}
+              className="rounded px-1.5 py-0.5 text-ink/55 hover:bg-ink/[0.06]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                saveEdit();
+              }}
+              className="rounded bg-tide/15 px-1.5 py-0.5 font-medium text-tide hover:bg-tide/25"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (period.varianceExplanation) {
+    return (
+      <button
+        type="button"
+        onClick={startEdit}
+        title="Click to edit explanation"
+        className="mt-2 block w-full rounded px-1 py-0.5 text-left text-[11px] italic leading-relaxed text-ink/65 hover:bg-ink/[0.05] focus:bg-ink/[0.05] focus:outline-none"
+      >
+        {period.varianceExplanation}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={startEdit}
+      className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-ink/45 hover:bg-ink/[0.05] hover:text-ink/70 focus:bg-ink/[0.05] focus:outline-none"
+    >
+      + Add variance explanation
+    </button>
   );
 }
 

@@ -593,3 +593,34 @@ export async function upsertTransactionOverride(
     [matchKey, params.transactionId],
   );
 }
+
+// ── Reconciliation variance explanation ─────────────────────────────────────
+
+export interface UpdateVarianceExplanationParams {
+  accountId: string;
+  periodStart: string;
+  periodEnd: string;
+  explanation: string;
+}
+
+/**
+ * Persist a human-authored variance explanation for a reconciliation period.
+ * The Python `reconcile_periods` tool preserves this text across reruns, so
+ * the note survives future recomputation as long as the (account_id,
+ * period_start, period_end) triple stays stable.
+ */
+export async function updateVarianceExplanation(
+  params: UpdateVarianceExplanationParams,
+): Promise<void> {
+  const database = await getDatabase();
+  if (!database) return;
+
+  await database.execute(
+    `UPDATE reconciliation_periods
+        SET variance_explanation = $1
+      WHERE account_id = $2
+        AND period_start = $3
+        AND period_end = $4`,
+    [params.explanation, params.accountId, params.periodStart, params.periodEnd],
+  );
+}
