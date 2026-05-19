@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (UI interactivity sprint landed — inline edits + file upload)
+**Last updated:** 2026-05-19 (roadmap §6 dashboard build-out closed: variance explanation editor, reconciliation history drill-down, subscriptions audit, HYSA trajectory chart, Capital-Plan Feasibility v1 badge)
 
 ## Snapshot
 
@@ -101,9 +101,17 @@ with `list_watch_root_files`. Using a Rust command for the copy keeps the
 watch-root path resolution in one place and avoids broadening the
 `plugin-fs` scope.
 
-**Next focus:** remaining roadmap §6 dashboard cards (HYSA trajectory chart,
-Capital-Plan Feasibility badge, real-data Subscription audit, reconciliation
-history drill-down, manual `variance_explanation` entry UI).
+**Next focus:** all five remaining roadmap §6 dashboard cards landed
+2026-05-19 — variance explanation editor, reconciliation history
+drill-down, Subscriptions / App Audit card, HYSA trajectory chart, and
+the Capital-Plan Feasibility v1 badge. The natural next slice is one of
+the still-deferred enrichment layers: roadmap item 2 (paystub PDF
+extraction), 3 (sinking funds + normalized monthly view), or 4 (forward
+projection engine through 12/31/2027). The Capital-Plan Feasibility
+badge currently runs on a v1 heuristic combining cash-flow, HYSA gate,
+and leakage signals; landing items 2-4 would let it drive against
+master-index §10's specific 401(k)/HSA/Roth/rental tests instead of
+coarse heuristics.
 
 ## Architecture (one-screen reminder)
 
@@ -211,6 +219,11 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Transaction Register section on Dashboard: paginated table (50/page) with direction filter (Outflows default / Inflows / All), merchant/description display, category badge (unclassified highlighted), pagination controls
 - [x] Transaction Register inline edit: click-to-edit merchant + category per row; Enter saves, Esc cancels, blur saves; optimistic React Query update with rollback-on-error, then invalidates `transaction-register` and `dashboard-snapshot`
 - [x] "Add source" file upload: Tauri file picker (csv/pdf) → `copy_to_watch_root` command → `document-checklist` invalidation; "Rescan folder" wired to the same invalidation; button disabled outside the Tauri runtime
+- [x] Reconciliation card inline variance-explanation edit: click the explanation (or "+ Add variance explanation" affordance) to open a textarea — Esc cancels, ⌘/Ctrl+Enter saves, blur saves; optimistic React Query update with rollback-on-error; persisted via `updateVarianceExplanation()` keyed by `(account_id, period_start, period_end)`, the same triple `reconcile_periods` preserves across reruns
+- [x] Reconciliation history drill-down: snapshot SQL now returns every period (sorted `period_end DESC` within each account); each card shows the latest period inline plus a "Show N earlier periods" toggle that reveals compact rows for every prior period with its own variance badge and explanation
+- [x] Subscriptions / App Audit card (master index §6 #11) driven from real classifier output: groups outflows whose `primary_category = 'fixed_obligation'` and `subcategory IN ('subscriptions_apps','streaming')` by merchant + owner, reports charge count, distinct months, average charge, monthly burn, last-charged date; ordered by monthly burn DESC with an aggregate burn total in the header
+- [x] HYSA trajectory chart (master index §6 #12): SVG line chart of Ally HYSA closing balances per period, with a linear-least-squares projection toward the $80K gate (master index §9). Reads `COALESCE(statement_closing_balance, computed_closing_balance)` from `reconciliation_periods` for any `account_type = 'savings'` account. Renders gate horizontal line, actual trajectory line, dashed projection segment, projected gate-date marker, latest balance + gate-progress KPI, and a summary block with projected gate date / implied monthly add / gate target. Returns a friendly empty state when fewer than two periods exist. Pure projection helper (`projectHysaGate`) is unit-tested.
+- [x] Capital-Plan Feasibility v1 badge (master index §6 #13 + §9): full-width card at the top of the dashboard with a Green/Yellow/Red badge plus three driver tiles (monthly net cash flow, HYSA gate trajectory, leakage overage). Overall status is the worst of the drivers. Heuristic combines already-available signals — master-index §10 (401(k)/HSA/Roth/rental net) tests still need paystub extraction, normalization, and forward projection (roadmap items 2-4) before they can drive the badge. Pure `assessCapitalPlanFeasibility` helper is unit-tested across the Green / Yellow / Red / unknown transitions.
 
 ### Reconciliation
 - [x] `reconciliation_periods` schema (one row per account per month, idempotent on UNIQUE (account_id, period_start, period_end))
@@ -298,11 +311,34 @@ normal use of the repo for transaction-based spending analysis.
   - Invalidates the `document-checklist` React Query key; "Rescan folder" wired to the same invalidation
   - Disabled outside the Tauri runtime; inline success/error message under the button
   - MCP `read_document_metadata` invocation deferred — Tauri frontend has no path to MCP tools; the existing 5s rescan + Cowork ingestion flow is sufficient
-- [ ] HYSA trajectory chart
-- [ ] Capital-Plan Feasibility card with Green/Yellow/Red badge
-- [ ] Subscription audit / leakage card driven from real data
-- [ ] Reconciliation history drill-down (currently only the latest period per account)
-- [ ] Manual `variance_explanation` entry UI (currently DB-only)
+- [x] **HYSA trajectory chart** (2026-05-19)
+  - New full-width section between the cash flow chart row and the reconciliation section (master index §6 #12)
+  - Reads `COALESCE(statement_closing_balance, computed_closing_balance)` per period from `reconciliation_periods` joined to `accounts` where `account_type = 'savings'`
+  - Pure helper `projectHysaGate()` fits a linear-least-squares line in days-since-first-point space and solves for the date when balance reaches the $80K gate; returns `null` gate date when the slope is non-positive, the latest observation date when the target is already reached
+  - SVG chart renders: $80K gate horizontal line, actual trajectory polyline + circle markers, dashed projection segment to the projected gate date, and a colored marker at that projected date
+  - Header carries the latest balance + gate-progress KPI; below the chart sits a 3-column summary (projected gate date / implied monthly add / gate target). Friendly empty state when fewer than two reconciled periods exist.
+- [x] **Capital-Plan Feasibility card with Green/Yellow/Red badge** (2026-05-19, v1 heuristic)
+  - New full-width card at the top of the dashboard (master index §6 #13 + §9 status definitions)
+  - Pure helper `assessCapitalPlanFeasibility()` blends three drivers: monthly net cash flow (avg / month), HYSA gate trajectory (months-to-gate vs. 2027 Roth target), and leakage overage (sum across cap-tracked categories)
+  - Each driver gets its own Green/Yellow/Red/unknown status with an explanatory detail line; the overall badge is the worst of the drivers
+  - Headline copy mirrors the §9 status definitions verbatim
+  - Card is explicitly labeled "v1 heuristic"; the master-index §10 capital-plan tests (401(k)/HSA/Roth/rental net) remain blocked on roadmap items 2 (paystub extraction), 3 (normalization), and 4 (forward projection engine)
+  - Status transitions covered by 6 unit tests (all-green, HYSA-driven Yellow, negative-net-flow Red, flat-trajectory Red, all-unknown empty state, heavy-leakage Red)
+- [x] **Subscriptions / App Audit card driven from real data** (2026-05-19)
+  - New section (master index §6 #11), distinct from the existing leakage card (§6 #6)
+  - SQL aggregates outflows whose `primary_category = 'fixed_obligation'` and `subcategory IN ('subscriptions_apps','streaming')`, grouped by `merchant_normalized` + `subcategory` + `household_role`
+  - Reports charge count, distinct months, avg charge, monthly burn (= total / distinct months), and last-charged date; rows ordered by monthly burn DESC, capped at 24
+  - Header shows the aggregate monthly burn across all visible rows
+  - To remove a row, reclassify the underlying transaction via the inline register editor — the row disappears on the next snapshot fetch
+- [x] **Reconciliation history drill-down** (2026-05-19)
+  - `getDashboardSnapshot()` SQL now returns every reconciliation period (sorted `period_end DESC` within each account, not just the latest)
+  - `groupReconciliationsByAccount()` (pure helper, unit-tested) buckets the flat list into `{ latest, history[] }` per account
+  - Each card shows the latest period inline; a "Show N earlier periods" toggle reveals compact `ReconciliationHistoryRow` entries for each prior period with its own variance badge and explanation
+- [x] **Manual `variance_explanation` entry UI** (2026-05-19)
+  - Click the explanation (or "+ Add variance explanation" affordance) on a reconciliation card to open an inline textarea
+  - Esc cancels, ⌘/Ctrl+Enter saves, blur saves; Save/Cancel buttons available below the field
+  - `updateVarianceExplanation()` in `src/services/sqlite.ts` runs an UPDATE keyed by `(account_id, period_start, period_end)` — the same triple `reconcile_periods` preserves across reruns, so notes survive recomputation
+  - Optimistic React Query update (with rollback-on-error) followed by invalidation of `dashboard-snapshot`
 
 ## Known issues and loose ends
 
