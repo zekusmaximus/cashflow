@@ -424,7 +424,11 @@ function ChecklistTable({
   onFilterChange,
 }: ChecklistTableProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const filteredItems = items.filter((item) => matchesChecklistFilter(item, filter));
+  // Available (obtained) items sort to the top so users see what's ready
+  // without scrolling past outstanding items.
+  const filteredItems = items
+    .filter((item) => matchesChecklistFilter(item, filter))
+    .sort((a, b) => Number(b.obtained) - Number(a.obtained));
   const defaultFilter = isDefaultFilter(filter);
 
   const toggleExpand = (id: string) => {
