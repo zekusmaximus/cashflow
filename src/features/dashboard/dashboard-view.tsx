@@ -1784,12 +1784,69 @@ function TransactionRegisterSection() {
   );
 }
 
+// ── Classification taxonomy ──────────────────────────────────────────────────
+// These are the canonical values recognised by the classifier rule engine and
+// downstream SQL queries. Keeping them co-located with TransactionRow makes
+// it obvious which values the selects surface.
+
+const PRIMARY_CATEGORIES = [
+  'income',
+  'fixed_obligation',
+  'variable_lifestyle',
+  'transfer',
+  'tax',
+  'rental',
+  'medical',
+  'investment',
+  'abnormal',
+  'unclassified',
+] as const;
+
+// Subcategories are grouped by their parent primary category. The select
+// resets its value whenever the user switches the primary category to a value
+// for which the current subcategory is not valid.
+const SUBCATEGORY_BY_PRIMARY: Record<string, readonly string[]> = {
+  income: [
+    'payroll', 'bonus', 'rsu_proceeds', 'interest',
+    'check_deposit', 'rental_income', 'reimbursement', 'refund', 'other_income',
+  ],
+  fixed_obligation: [
+    'mortgage', 'rent', 'insurance', 'utilities',
+    'subscriptions_apps', 'streaming', 'loan_payment', 'property_fees',
+    'tuition', 'other_fixed',
+  ],
+  variable_lifestyle: [
+    'groceries', 'dining', 'amazon', 'pets', 'travel', 'clothing',
+    'entertainment', 'gifts', 'software', 'personal_care',
+    'home_goods', 'intra_household', 'other_variable',
+  ],
+  transfer: [],
+  tax: ['federal_tax', 'state_tax', 'estimated_tax', 'tax_payment', 'tax_refund'],
+  rental: [
+    'rental_income', 'rental_expense', 'rental_mortgage', 'hoa',
+    'rental_insurance', 'rental_repairs', 'rental_management',
+  ],
+  medical: ['doctor', 'pharmacy', 'dental', 'vision', 'hsa_expense', 'insurance_premium', 'vet', 'pet_medical'],
+  investment: ['401k', 'hsa_contribution', 'roth_ira', 'brokerage', 'rsu', 'other_investment'],
+  abnormal: ['home_repair', 'vehicle', 'legal', 'emergency', 'one_time_purchase', 'other_abnormal'],
+  unclassified: [],
+};
+
+const HOUSEHOLD_ROLES = ['jeff', 'ashley', 'joint', 'rental', 'pet', 'professional', 'tax'] as const;
+
 type EditField = 'merchant' | 'category';
 
 function TransactionRow({ tx }: { tx: Transaction }) {
   const queryClient = useQueryClient();
   const [editField, setEditField] = useState<EditField | null>(null);
-  const [draft, setDraft] = useState('');
+
+  // Merchant edit state
+  const [merchantDraft, setMerchantDraft] = useState('');
+
+  // Category edit state (three separate fields)
+  const [primaryDraft, setPrimaryDraft] = useState('');
+  const [subcategoryDraft, setSubcategoryDraft] = useState('');
+  const [roleDraft, setRoleDraft] = useState('');
 
   const mutation = useMutation({
     mutationFn: (params: UpsertTransactionOverrideParams) =>
@@ -1809,10 +1866,11 @@ function TransactionRow({ tx }: { tx: Transaction }) {
               row.id === params.transactionId
                 ? {
                     ...row,
-                    merchantNormalized:
-                      params.merchantNormalized ?? row.merchantNormalized,
-                    primaryCategory:
-                      params.primaryCategory ?? row.primaryCategory,
+                    merchantNormalized: params.merchantNormalized ?? row.merchantNormalized,
+                    primaryCategory: params.primaryCategory ?? row.primaryCategory,
+                    // undefined means "field not included in this save" — leave existing value
+                    subcategory: params.subcategory !== undefined ? params.subcategory : row.subcategory,
+                    householdRole: params.householdRole ?? row.householdRole,
                   }
                 : row,
             ),
@@ -1835,22 +1893,22 @@ function TransactionRow({ tx }: { tx: Transaction }) {
 
   const startEdit = (field: EditField) => {
     setEditField(field);
-    setDraft(field === 'merchant' ? (tx.merchantNormalized ?? '') : tx.primaryCategory);
+    if (field === 'merchant') {
+      setMerchantDraft(tx.merchantNormalized ?? '');
+    } else {
+      setPrimaryDraft(tx.primaryCategory);
+      setSubcategoryDraft(tx.subcategory ?? '');
+      setRoleDraft(tx.householdRole ?? '');
+    }
   };
 
   const cancelEdit = () => {
     setEditField(null);
-    setDraft('');
   };
 
-  const saveEdit = () => {
-    if (!editField) return;
-    const trimmed = draft.trim();
-    const current =
-      editField === 'merchant'
-        ? (tx.merchantNormalized ?? '')
-        : tx.primaryCategory;
-    if (!trimmed || trimmed === current) {
+  const saveMerchantEdit = () => {
+    const trimmed = merchantDraft.trim();
+    if (!trimmed || trimmed === (tx.merchantNormalized ?? '')) {
       cancelEdit();
       return;
     }
@@ -1860,18 +1918,48 @@ function TransactionRow({ tx }: { tx: Transaction }) {
       occurredOn: tx.occurredOn,
       amount: tx.amount,
       descriptionRaw: tx.descriptionRaw,
-      ...(editField === 'merchant'
-        ? { merchantNormalized: trimmed }
-        : { primaryCategory: trimmed }),
+      merchantNormalized: trimmed,
     });
     cancelEdit();
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+  const saveCategoryEdit = () => {
+    const primary = primaryDraft.trim();
+    const sub = subcategoryDraft.trim() || null;
+    const role = roleDraft.trim() || undefined;
+    const unchanged =
+      primary === tx.primaryCategory &&
+      (sub ?? '') === (tx.subcategory ?? '') &&
+      (role ?? '') === (tx.householdRole ?? '');
+    if (!primary || unchanged) {
+      cancelEdit();
+      return;
+    }
+    mutation.mutate({
+      transactionId: tx.id,
+      accountId: tx.accountId,
+      occurredOn: tx.occurredOn,
+      amount: tx.amount,
+      descriptionRaw: tx.descriptionRaw,
+      primaryCategory: primary,
+      subcategory: sub,
+      householdRole: role,
+    });
+    cancelEdit();
+  };
+
+  const handleMerchantKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      saveEdit();
+      saveMerchantEdit();
     } else if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelEdit();
+    }
+  };
+
+  const handleSelectKeyDown = (event: React.KeyboardEvent<HTMLSelectElement>) => {
+    if (event.key === 'Escape') {
       event.preventDefault();
       cancelEdit();
     }
@@ -1886,6 +1974,11 @@ function TransactionRow({ tx }: { tx: Transaction }) {
 
   const inputClasses =
     'w-full rounded border border-tide/50 bg-white px-1.5 py-0.5 text-[12px] text-ink outline-none focus:border-tide';
+  const selectClasses =
+    'w-full rounded border border-tide/50 bg-white px-1 py-0.5 text-[11px] font-mono text-ink outline-none focus:border-tide cursor-pointer';
+
+  // Subcategory options that are valid for the currently-selected primary.
+  const subcategoryOptions = SUBCATEGORY_BY_PRIMARY[primaryDraft] ?? [];
 
   return (
     <tr className="hover:bg-paper/40 transition-colors">
@@ -1899,10 +1992,10 @@ function TransactionRow({ tx }: { tx: Transaction }) {
         {editField === 'merchant' ? (
           <input
             autoFocus
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={saveEdit}
+            value={merchantDraft}
+            onChange={(event) => setMerchantDraft(event.target.value)}
+            onKeyDown={handleMerchantKeyDown}
+            onBlur={saveMerchantEdit}
             placeholder="Merchant name"
             className={cn(inputClasses, 'max-w-[260px]')}
             aria-label="Edit merchant"
@@ -1920,21 +2013,77 @@ function TransactionRow({ tx }: { tx: Transaction }) {
       </td>
       <td className="px-4 py-2.5">
         {editField === 'category' ? (
-          <input
-            autoFocus
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={saveEdit}
-            placeholder="primary_category"
-            className={cn(inputClasses, 'max-w-[200px] font-mono text-[11px]')}
-            aria-label="Edit category"
-          />
+          <div className="flex flex-col gap-1.5 min-w-[200px]">
+            {/* Primary category */}
+            <select
+              autoFocus
+              value={primaryDraft}
+              onChange={(e) => {
+                const next = e.target.value;
+                setPrimaryDraft(next);
+                // Clear subcategory when it isn't valid for the new primary
+                if (!(SUBCATEGORY_BY_PRIMARY[next] ?? []).includes(subcategoryDraft)) {
+                  setSubcategoryDraft('');
+                }
+              }}
+              onKeyDown={handleSelectKeyDown}
+              className={selectClasses}
+              aria-label="Primary category"
+            >
+              {PRIMARY_CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+            {/* Subcategory — only shown when the primary has valid options */}
+            {subcategoryOptions.length > 0 && (
+              <select
+                value={subcategoryDraft}
+                onChange={(e) => setSubcategoryDraft(e.target.value)}
+                onKeyDown={handleSelectKeyDown}
+                className={selectClasses}
+                aria-label="Subcategory"
+              >
+                <option value="">— subcategory —</option>
+                {subcategoryOptions.map((sub) => (
+                  <option key={sub} value={sub}>{sub}</option>
+                ))}
+              </select>
+            )}
+            {/* Household role */}
+            <select
+              value={roleDraft}
+              onChange={(e) => setRoleDraft(e.target.value)}
+              onKeyDown={handleSelectKeyDown}
+              className={selectClasses}
+              aria-label="Household role"
+            >
+              <option value="">— owner —</option>
+              {HOUSEHOLD_ROLES.map((role) => (
+                <option key={role} value={role}>{role}</option>
+              ))}
+            </select>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); saveCategoryEdit(); }}
+                className="rounded bg-tide/15 px-1.5 py-0.5 text-[10px] font-medium text-tide hover:bg-tide/25"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); cancelEdit(); }}
+                className="rounded px-1.5 py-0.5 text-[10px] text-ink/55 hover:bg-ink/[0.06]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         ) : (
           <button
             type="button"
             onClick={() => startEdit('category')}
-            title="Click to edit category"
+            title="Click to edit category, subcategory, and owner"
             className={cn(
               'inline-block rounded px-1.5 py-0.5 text-[10px] font-medium hover:ring-1 hover:ring-tide/40 focus:outline-none focus:ring-1 focus:ring-tide/60',
               isUnclassified
