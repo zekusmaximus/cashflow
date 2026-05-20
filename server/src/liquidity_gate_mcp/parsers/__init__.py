@@ -18,6 +18,12 @@ from .chase_csv import (
     ChaseParseResult,
     parse_chase_csv,
 )
+from .citi_csv import (
+    CITI_ACCOUNT,
+    PARSER_VERSION as CITI_PARSER_VERSION,
+    CitiParseResult,
+    parse_citi_csv,
+)
 from .webster_csv import (
     PARSER_VERSION as WEBSTER_PARSER_VERSION,
     WEBSTER_CHECKING_ACCOUNT,
@@ -34,6 +40,9 @@ __all__ = [
     "CHASE_ACCOUNT",
     "CHASE_PARSER_VERSION",
     "ChaseParseResult",
+    "CITI_ACCOUNT",
+    "CITI_PARSER_VERSION",
+    "CitiParseResult",
     "ParseResult",
     "SkippedRow",
     "WEBSTER_CHECKING_ACCOUNT",
@@ -42,5 +51,6 @@ __all__ = [
     "parse_ally_csv",
     "parse_beacon_csv",
     "parse_chase_csv",
+    "parse_citi_csv",
     "parse_webster_csv",
 ]

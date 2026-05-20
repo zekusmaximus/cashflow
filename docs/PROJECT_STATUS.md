@@ -172,7 +172,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
   - [x] `|seqN` suffix disambiguates duplicate same-day same-amount same-description rows while the first occurrence keeps the legacy hash (backwards-compat)
   - [x] Pending rows skipped
 - [x] Beacon checking CSV parser ([parsers/beacon_csv.py](../server/src/liquidity_gate_mcp/parsers/beacon_csv.py))
-  - [x] Four transfer regexes (CHASE CREDIT CRD, ALLY BANK $TRANSFER, ALLY BANK P2P, IonBank ONLINE XFR)
+  - [x] Six transfer regexes (CHASE CREDIT CRD, CITI AUTOPAY PAYMENT, ALLY BANK $TRANSFER, ALLY BANK P2P, IonBank ONLINE XFR, WEBSTR … ASHLEY M CALABR)
   - [x] Running balance preserved in metadata_json
   - [x] Source key includes balance (avoids same-day duplicate collapse)
 - [x] Ally HYSA CSV parser ([parsers/ally_csv.py](../server/src/liquidity_gate_mcp/parsers/ally_csv.py))
@@ -180,6 +180,12 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
   - [x] Time-in-source-key tiebreaker (Ally has no running balance column)
   - [x] Transfer regexes for "Requested transfer from/to" patterns
   - [x] Interest Paid stays inflow; external Zelle stays outflow
+- [x] Citi credit-card CSV parser ([parsers/citi_csv.py](../server/src/liquidity_gate_mcp/parsers/citi_csv.py))
+  - [x] Two-column Debit/Credit format; Debit positive = charge (stored as negative `amount`, `direction='outflow'`); Credit negative = payment/refund (sign-flipped to positive `amount`, `direction='inflow'`)
+  - [x] AUTOPAY rows auto-tagged `direction='transfer'` so they pair with Beacon-side `CITI AUTOPAY PAYMENT` outbounds
+  - [x] Status column gates ingest: only `Cleared` / `Posted` rows are persisted; `Pending` is skipped
+  - [x] Both-debit-and-credit-filled rows raise an error rather than silently picking a side
+  - [x] Idempotent SHA-256 `source_record_key` with `|seqN` tiebreaker for genuine same-day same-amount duplicates
 - [x] Webster checking CSV parser ([parsers/webster_csv.py](../server/src/liquidity_gate_mcp/parsers/webster_csv.py))
   - [x] Ashley-owned account (`owner="ashley"`, `household_role="ashley"`)
   - [x] Split Debit/Credit columns combined; running balance preserved in metadata

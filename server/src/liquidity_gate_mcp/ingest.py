@@ -18,11 +18,13 @@ from .parsers import (
     ALLY_PARSER_VERSION,
     BEACON_PARSER_VERSION,
     CHASE_PARSER_VERSION,
+    CITI_PARSER_VERSION,
     WEBSTER_PARSER_VERSION,
     ParseResult,
     parse_ally_csv,
     parse_beacon_csv,
     parse_chase_csv,
+    parse_citi_csv,
     parse_webster_csv,
 )
 from .tools import (
@@ -63,6 +65,11 @@ PARSERS: dict[str, ParserRegistration] = {
         name="webster-checking",
         version=WEBSTER_PARSER_VERSION,
         parse=parse_webster_csv,
+    ),
+    "doc-087": ParserRegistration(
+        name="citi-credit-card",
+        version=CITI_PARSER_VERSION,
+        parse=parse_citi_csv,
     ),
 }
 

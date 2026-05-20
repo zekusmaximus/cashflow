@@ -24,6 +24,9 @@ BeaconParseResult = ParseResult
 # against spend already captured on another account.
 #
 # - chase\s+credit : payments made from checking to the Chase card.
+# - citi\s+autopay\s+payment : monthly autopay sweeps from checking to
+#   the Citi credit card (EZPass + small political contributions).
+#   Pairs with citi_csv.py's AUTOPAY rows tagged direction='transfer'.
 # - ally\s+bank\s*\$?transfer : sweeps from checking to the Ally HYSA.
 # - ally\s+bank\s+p2p : Ally-initiated P2P pulls from joint checking back
 #   into the Ally HYSA. Same flow as $TRANSFER but Ally tags the originating
@@ -41,6 +44,7 @@ BeaconParseResult = ParseResult
 # human review rather than auto-classified.
 TRANSFER_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"chase\s+credit", re.IGNORECASE),
+    re.compile(r"citi\s+autopay\s+payment", re.IGNORECASE),
     re.compile(r"ally\s+bank\s*\$?transfer", re.IGNORECASE),
     re.compile(r"ally\s+bank\s+p2p", re.IGNORECASE),
     re.compile(r"ionbank\s+online\s+xfr", re.IGNORECASE),
