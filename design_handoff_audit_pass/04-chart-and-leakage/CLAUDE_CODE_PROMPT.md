@@ -36,7 +36,7 @@ I'm applying the fourth pass from the audit handoff. The spec lives at `design_h
      - `list_leakage_transactions(category_id: String, range: TimeRange) -> Vec<Transaction>`
      - Reads from existing `transactions` table; filters by category + date range
      - **No schema migration**
-     - Register on `invoke_handler` line; declare capability in `src-tauri/capabilities/main.json` (Tauri v2)
+     - Register on the `invoke_handler` line. **No ACL / capability declaration needed** — app-defined `#[tauri::command]` functions are not gated by the shell plugin's permission system. (The earlier `reveal_in_file_manager` command in pass 03 confirmed this empirically.)
 
 3. **Do NOT touch:**
    - Matcher logic

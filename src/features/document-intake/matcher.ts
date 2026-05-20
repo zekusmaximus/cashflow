@@ -97,6 +97,8 @@ export interface CandidateFile {
   stem: string;
   extension: string;
   parentName: string;
+  /** Epoch milliseconds of last modification; absent when the indexer can't read it. */
+  modifiedMs?: number;
 }
 
 export interface ScoredMatch {

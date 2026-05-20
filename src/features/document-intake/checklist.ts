@@ -8,6 +8,16 @@ export function parseObtainedFlag(value: string): boolean {
   return normalized === 'yes' || normalized === 'true' || normalized.includes('✓') || normalized.includes('☑');
 }
 
+/**
+ * Derives a stable category id from a category label. Tracker categories carry
+ * a single-letter prefix ('A. Core Transactions') used as the filter key; rows
+ * without a recognizable prefix fall back to the full label so ids stay unique.
+ */
+export function deriveCategoryId(category: string): string {
+  const match = category.match(/^([A-Za-z])\.\s/);
+  return match ? match[1].toUpperCase() : category.trim();
+}
+
 export class TrackerCsvUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -79,6 +89,7 @@ export async function loadChecklistDataset(): Promise<ChecklistDataset> {
         relativePath: file.relativePath,
         filename: file.filename,
         score: bestScore,
+        modifiedMs: file.modifiedMs ?? null,
       });
     }
   }
@@ -97,9 +108,14 @@ export async function loadChecklistDataset(): Promise<ChecklistDataset> {
       : filesystemObtained
         ? 'filesystem'
         : 'none';
+    const lastModifiedMs = matchedFiles.reduce<number | null>((latest, file) => {
+      if (file.modifiedMs == null) return latest;
+      return latest == null || file.modifiedMs > latest ? file.modifiedMs : latest;
+    }, null);
     return {
       id: `doc-${index + 1}`,
       category: scoringRow.category,
+      categoryId: deriveCategoryId(scoringRow.category),
       document: scoringRow.document,
       subjectMatter: scoringRow.subjectMatter,
       format: scoringRow.format,
@@ -109,6 +125,7 @@ export async function loadChecklistDataset(): Promise<ChecklistDataset> {
       obtained,
       obtainedSource,
       matchedFiles,
+      lastModifiedMs,
       dateAdded: row['Date Added'] ?? '',
       notes: row['Notes'] ?? '',
     };
@@ -139,6 +156,7 @@ export async function loadChecklistDataset(): Promise<ChecklistDataset> {
       missingCount: items.filter((item) => !item.obtained).length,
       categories: [...categoryMap.entries()].map(([category, counts]) => ({
         category,
+        categoryId: deriveCategoryId(category),
         total: counts.total,
         obtained: counts.obtained,
         missing: counts.total - counts.obtained,
