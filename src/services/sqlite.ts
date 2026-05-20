@@ -242,6 +242,7 @@ interface MonthlyRow {
 
 interface LeakageRow {
   name: string;
+  categoryKey: string;
   monthlyBurn: number | null;
   cap: number | null;
 }
@@ -310,6 +311,7 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
 
   const months: CashFlowMonth[] = monthlyRows.map((row) => ({
     label: monthLabel(row.month),
+    month: row.month,
     inflow: row.inflow ?? 0,
     outflow: row.outflow ?? 0,
   }));
@@ -325,6 +327,7 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
   // dashboard renders an explicit empty-state).
   const leakageRows = await database.select<LeakageRow>(
     `SELECT lc.name AS name,
+            lc.category_key AS categoryKey,
             COALESCE(lc.monthly_cap, 0) AS cap,
             COALESCE((
               SELECT ROUND(AVG(monthly_total), 2) FROM (
@@ -341,6 +344,7 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
 
   const leakageCategories: LeakageCategory[] = leakageRows.map((row) => ({
     name: row.name,
+    categoryKey: row.categoryKey,
     monthlyBurn: row.monthlyBurn ?? 0,
     cap: row.cap ?? 0,
   }));

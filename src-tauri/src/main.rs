@@ -3,7 +3,25 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LeakageTimeRange {
+    start: String, // "YYYY-MM"
+    end: String,   // "YYYY-MM"
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LeakageTransaction {
+    id: String,
+    vendor: String,
+    amount: f64,
+    date: String,
+    raw_description: String,
+    match_score: Option<f64>,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,6 +226,73 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     result.map(|_| ()).map_err(|err| err.to_string())
 }
 
+#[tauri::command]
+fn list_leakage_transactions(
+    app: tauri::AppHandle,
+    category_id: String,
+    range: LeakageTimeRange,
+) -> Result<Vec<LeakageTransaction>, String> {
+    use tauri::Manager;
+    let db_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("liquidity-gate.db");
+
+    if !db_path.exists() {
+        return Ok(vec![]);
+    }
+
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let start_date = format!("{}-01", range.start);
+    let end_date = format!("{}-31", range.end);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id,
+                    COALESCE(NULLIF(merchant_normalized, ''), description_raw) AS vendor,
+                    ABS(amount) AS amount,
+                    occurred_on AS date,
+                    description_raw
+               FROM transactions
+              WHERE direction = 'outflow'
+                AND primary_category = ?1
+                AND occurred_on >= ?2
+                AND occurred_on <= ?3
+              ORDER BY occurred_on DESC
+              LIMIT 200",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(
+            rusqlite::params![category_id, start_date, end_date],
+            |row| {
+                Ok(LeakageTransaction {
+                    id: row.get(0)?,
+                    vendor: row.get(1)?,
+                    amount: row.get(2)?,
+                    date: row.get(3)?,
+                    raw_description: row.get(4)?,
+                    match_score: None,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -216,7 +301,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             list_watch_root_files,
             copy_to_watch_root,
-            reveal_in_file_manager
+            reveal_in_file_manager,
+            list_leakage_transactions
         ])
         .run(tauri::generate_context!())
         .expect("error while running Liquidity Gate");

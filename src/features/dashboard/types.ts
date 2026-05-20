@@ -1,5 +1,7 @@
 export interface CashFlowMonth {
   label: string;
+  /** YYYY-MM string from the monthly_cashflow_summary view; optional for mock/test data. */
+  month?: string;
   inflow: number;
   outflow: number;
 }
@@ -14,6 +16,8 @@ export interface LiquidityGate {
 
 export interface LeakageCategory {
   name: string;
+  /** Primary-category key used in the transactions table; optional for mock/test data. */
+  categoryKey?: string;
   monthlyBurn: number;
   cap: number;
 }
@@ -100,4 +104,13 @@ export interface TransactionPage {
 
 export type TransactionDirectionFilter = 'all' | 'inflow' | 'outflow';
 
-export type DashboardRange = 'ytd' | '12mo' | 'all';
+export type DashboardRange = 'ytd' | '12mo' | 'all' | 'custom';
+
+export interface LeakageTransaction {
+  id: string;
+  vendor: string;
+  amount: number;
+  date: string;
+  rawDescription: string;
+  matchScore?: number;
+}
