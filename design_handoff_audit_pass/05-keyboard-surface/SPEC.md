@@ -16,7 +16,7 @@
 Three interlocking pieces:
 
 1. **Global shortcuts.** Always-on key handlers for the highest-frequency actions (tab switching, command palette, force-rescan).
-2. **Command palette.** A `⌘K` modal that searches across an action registry: jump to category, filter to missing/essential, switch tabs, open watch folder, scroll to chart, etc. Type to fuzzy-match. Enter to execute.
+2. **Command palette.** A `⌘K` modal that searches across an action registry: jump to category, filter to essential-open, switch tabs, open watch folder, scroll to chart, etc. Type to fuzzy-match. Enter to execute.
 3. **Discoverability.** A small `⌘K` hint pinned to the bottom-right of the window. Users need to know the surface exists.
 
 ---
@@ -234,15 +234,18 @@ Document the choice in the PR description.
 export function buildCommandRegistry(ctx: CommandContext): Command[] {
   return [
     // Navigation
-    { id: 'view:intake',    label: 'Go to Intake',     shortcut: `${modKey}1`, hint: 'view', action: () => ctx.setView('intake') },
+    { id: 'view:intake',    label: 'Go to Source intake', shortcut: `${modKey}1`, hint: 'view', action: () => ctx.setView('intake') },
     { id: 'view:dashboard', label: 'Go to Cash flow',  shortcut: `${modKey}2`, hint: 'view', action: () => ctx.setView('dashboard') },
 
-    // Intake filters
-    { id: 'filter:essentials', label: 'Filter to essential missing', hint: 'intake · filter',
-      keywords: ['urgent', 'priority'],
-      action: () => { ctx.setView('intake'); ctx.setFilter({ status: 'missing', priority: 'essential', category: 'all' }); } },
-    { id: 'filter:missing', label: 'Filter to missing', hint: 'intake · filter',
-      action: () => { ctx.setView('intake'); ctx.setFilter({ ...ctx.filter, status: 'missing' }); } },
+    // Intake filters — literal filter shape must match what pass 02/03 settled in this codebase.
+    // Live vocab: status is `'open' | 'ready' | 'all'`; priority is `'essential' | 'useful' | 'all'`
+    // (or `isEssential: boolean | null` — adapt if so).
+    { id: 'filter:essentials', label: 'Start with essentials', hint: 'intake · filter',
+      keywords: ['urgent', 'priority', 'open', 'missing'],
+      action: () => { ctx.setView('intake'); ctx.setFilter({ status: 'open', priority: 'essential', category: 'all' }); } },
+    { id: 'filter:open', label: 'Filter to still-open sources', hint: 'intake · filter',
+      keywords: ['missing'],
+      action: () => { ctx.setView('intake'); ctx.setFilter({ ...ctx.filter, status: 'open' }); } },
     { id: 'filter:clear', label: 'Clear all filters', hint: 'intake · filter',
       action: () => ctx.setFilter({ status: 'all', priority: 'all', category: 'all' }) },
 
@@ -337,8 +340,8 @@ This is a cross-cutting polish item. Verify tab-cycling through the intake view 
 
 - [ ] `⌘K` (Mac) / `Ctrl+K` (Windows/Linux) opens the command palette from anywhere in the app, including inside text inputs
 - [ ] Escape closes the palette; arrow keys navigate the result list; Enter executes
-- [ ] Typing fuzzy-matches commands; "ess" surfaces "Filter to essential missing"; "cash" surfaces "Go to Cash flow"
-- [ ] `⌘1` switches to Intake; `⌘2` switches to Cash flow; both work from any focus state except text inputs
+- [ ] Typing fuzzy-matches commands; "ess" surfaces "Start with essentials"; "cash" surfaces "Go to Cash flow"
+- [ ] `⌘1` switches to Source intake; `⌘2` switches to Cash flow; both work from any focus state except text inputs
 - [ ] `⌘R` (or chosen alternative) triggers force-rescan
 - [ ] Each category in the data produces a "Jump to X" command in the palette
 - [ ] Watch-folder commands (reveal, copy path) work via palette as well as via the strip buttons (pass 03)

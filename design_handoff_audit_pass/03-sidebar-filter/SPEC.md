@@ -14,27 +14,44 @@
 
 ---
 
+## Live-code vocabulary
+
+The SPEC uses the codebase's actual terminology, not the audit's HTML mockup terms:
+
+| Concept | Live code |
+|---|---|
+| Per-row status (still needed) | `'open'` |
+| Per-row status (have it) | `'ready'` |
+| Per-row priority flag | `isEssential` (boolean) |
+| Category summary fields | **verify before coding** — likely `obtained` / `total`, but may be `ready` / `sources` or similar |
+
+If any of these differ in your live code (especially the category-summary field names), adapt the property accesses; the semantic intent is the contract.
+
+---
+
 ## File changes
 
 ### 1. `src/features/document-intake/document-intake-view.tsx`
 
 #### a. Extend the filter shape
 
-Pass 02 introduced:
+Pass 02 introduced (with live terminology):
 ```ts
-type TableFilter = { status: 'all' | 'missing'; priority: 'all' | 'essential' };
+type TableFilter = { status: 'all' | 'open'; priority: 'all' | 'essential' };
 ```
 
-Extend it:
+Extend it to add a third dimension and broaden the existing two:
 ```ts
 type TableFilter = {
-  status: 'all' | 'missing' | 'obtained';
+  status: 'all' | 'open' | 'ready';
   priority: 'all' | 'essential' | 'useful';
   category: string | 'all';  // category id, e.g. 'A', or 'all'
 };
 ```
 
-The shape composes — selecting a category narrows what the status / priority pills filter from. The EssentialsBanner's onStart still works the same (`{ status: 'missing', priority: 'essential', category: 'all' }`).
+If pass 02 used a different literal shape (e.g. `{ isEssential: true | false | null, status: 'open' | 'ready' | 'all' }`), keep that shape and just add the `category` field. The semantic intent — "narrow the table to: this category × this status × this priority" — is the contract.
+
+The shape composes — selecting a category narrows what the status / priority pills filter from. The EssentialsBanner's `onStart` still works the same: it sets `{ status: 'open', priority: 'essential', category: 'all' }` (or your equivalent literal).
 
 #### b. Make `<CategorySidebar />` clickable
 
@@ -89,6 +106,8 @@ function CategorySidebar({ categories, activeCategory, onCategoryChange }: Categ
 }
 
 function CategoryRow({ id, name, obtained, total, active, onClick }: { /* ... */ }) {
+  // Field names on the live `CategorySummary` may differ — see the Live-code vocabulary table.
+  // The contract here: `obtained` = items in this category that are ready, `total` = all items.
   const pct = total === 0 ? 0 : (obtained / total) * 100;
   return (
     <button
@@ -212,6 +231,13 @@ const filtered = useMemo(() => {
   });
 }, [items, filter]);
 ```
+
+**Adapt to live shape:** if your `ChecklistItem` uses `isEssential: boolean` instead of `priority: 'essential' | 'useful'`, the priority predicate becomes:
+```ts
+if (filter.priority === 'essential' && !i.isEssential) return false;
+if (filter.priority === 'useful' && i.isEssential) return false;
+```
+Match whatever pass 02 established in this codebase.
 
 When the active filter narrows to zero rows, show a small empty state in the table body:
 ```tsx
