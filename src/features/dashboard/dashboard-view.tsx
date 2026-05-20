@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useMutation, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { cn, currency, percent } from '../../lib/utils';
 import { useTransactionRegister } from '../../hooks/use-transaction-register';
+import { TransactionDrawer } from './transaction-drawer';
 import {
   updateVarianceExplanation,
   upsertTransactionOverride,
@@ -56,7 +57,120 @@ interface DashboardViewProps {
   onRangeChange: (range: DashboardRange) => void;
 }
 
+// ── Trailing delta helper ────────────────────────────────────────────────────
+
+function trailingDelta(
+  months: CashFlowMonth[],
+  key: 'inflow' | 'outflow',
+): { delta: number; label: string } | null {
+  if (months.length < 2) return null;
+  if (months.length >= 6) {
+    const recent = months.slice(-3).reduce((s, m) => s + m[key], 0) / 3;
+    const prior = months.slice(-6, -3).reduce((s, m) => s + m[key], 0) / 3;
+    if (prior === 0) return null;
+    return { delta: (recent - prior) / prior, label: 'vs. trailing 3-mo' };
+  }
+  const last = months[months.length - 1];
+  const prev = months[months.length - 2];
+  const prevVal = prev[key];
+  if (prevVal === 0) return null;
+  return { delta: (last[key] - prevVal) / prevVal, label: 'vs. prior month' };
+}
+
+// ── Custom range popover ─────────────────────────────────────────────────────
+
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+function CustomRangePopover({
+  onApply,
+  onClose,
+}: {
+  onApply: (range: { start: string; end: string }) => void;
+  onClose: () => void;
+}) {
+  const currentYear = new Date().getFullYear();
+  const years = [currentYear - 2, currentYear - 1, currentYear];
+
+  const [startMonth, setStartMonth] = useState('01');
+  const [startYear, setStartYear] = useState(String(currentYear));
+  const [endMonth, setEndMonth] = useState(String(new Date().getMonth() + 1).padStart(2, '0'));
+  const [endYear, setEndYear] = useState(String(currentYear));
+
+  const selectClass =
+    'rounded border border-ink/15 bg-white px-2 py-1 text-[12px] text-ink outline-none focus:border-tide';
+
+  return (
+    <div className="absolute right-0 top-full z-30 mt-1 rounded-lg border border-ink/10 bg-white p-4 shadow-card">
+      <div className="mb-3 text-[10px] font-medium uppercase tracking-[0.16em] text-ink/45">
+        Custom range
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="mb-1 text-[10px] text-ink/55">Start</div>
+          <div className="flex gap-1.5">
+            <select value={startMonth} onChange={(e) => setStartMonth(e.target.value)} className={selectClass}>
+              {MONTH_NAMES.map((m, i) => (
+                <option key={m} value={String(i + 1).padStart(2, '0')}>{m}</option>
+              ))}
+            </select>
+            <select value={startYear} onChange={(e) => setStartYear(e.target.value)} className={selectClass}>
+              {years.map((y) => <option key={y} value={String(y)}>{y}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <div className="mb-1 text-[10px] text-ink/55">End</div>
+          <div className="flex gap-1.5">
+            <select value={endMonth} onChange={(e) => setEndMonth(e.target.value)} className={selectClass}>
+              {MONTH_NAMES.map((m, i) => (
+                <option key={m} value={String(i + 1).padStart(2, '0')}>{m}</option>
+              ))}
+            </select>
+            <select value={endYear} onChange={(e) => setEndYear(e.target.value)} className={selectClass}>
+              {years.map((y) => <option key={y} value={String(y)}>{y}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded px-2.5 py-1 text-[12px] text-ink/55 hover:bg-ink/[0.05]"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            onApply({ start: `${startYear}-${startMonth}`, end: `${endYear}-${endMonth}` })
+          }
+          className="rounded bg-tide/15 px-2.5 py-1 text-[12px] font-medium text-tide hover:bg-tide/25"
+        >
+          Apply
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard view ───────────────────────────────────────────────────────────
+
 export function DashboardView({ query, activeRange, onRangeChange }: DashboardViewProps) {
+  // Drawer state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerCategory, setDrawerCategory] = useState<{
+    key: string;
+    name: string;
+  } | null>(null);
+
+  // Custom range state
+  const [customRangeOpen, setCustomRangeOpen] = useState(false);
+  const [customRange, setCustomRange] = useState<{ start: string; end: string } | null>(null);
+
   if (query.isLoading) {
     return (
       <div className="rounded-xl border border-ink/8 bg-white p-6 text-sm text-ink/70 shadow-card">
@@ -74,13 +188,24 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
   }
 
   const {
-    months,
+    months: allMonths,
     gates,
     leakageCategories,
     reconciliations,
     subscriptionAudit,
     hysaTrajectory,
   } = query.data;
+
+  // When custom range is active and months have YYYY-MM data, filter locally.
+  const months =
+    activeRange === 'custom' && customRange
+      ? allMonths.filter(
+          (m) =>
+            m.month === undefined ||
+            (m.month >= customRange.start && m.month <= customRange.end),
+        )
+      : allMonths;
+
   const totalInflow = months.reduce((total, m) => total + m.inflow, 0);
   const totalOutflow = months.reduce((total, m) => total + m.outflow, 0);
   const netYtd = totalInflow - totalOutflow;
@@ -97,62 +222,123 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
     leakageCategories,
   );
 
+  const inflowDelta = trailingDelta(months, 'inflow');
+  const outflowDelta = trailingDelta(months, 'outflow');
+
+  // Drawer range: span the currently-displayed months
+  const drawerRange =
+    months.length > 0 && months[0].month && months[months.length - 1].month
+      ? { start: months[0].month, end: months[months.length - 1].month as string }
+      : { start: '', end: '' };
+
+  const openDrawer = (category: { key: string; name: string }) => {
+    setDrawerCategory(category);
+    setDrawerOpen(true);
+  };
+
   return (
-    <div>
-      <div className="mb-4 flex items-baseline justify-between gap-4">
-        <div className="min-w-0 flex items-baseline gap-3">
-          <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
-            Phase 2
-          </span>
-          <h1 className="text-[18px] font-semibold tracking-tight text-ink">Cash flow</h1>
-        </div>
-        <div className="flex shrink-0 items-center gap-1 rounded-lg bg-ink/[0.05] p-0.5 text-[12px]">
-          <RangeButton active={activeRange === 'ytd'} onClick={() => onRangeChange('ytd')}>YTD</RangeButton>
-          <RangeButton active={activeRange === '12mo'} onClick={() => onRangeChange('12mo')}>12 mo</RangeButton>
-          <RangeButton active={activeRange === 'all'} onClick={() => onRangeChange('all')}>All</RangeButton>
-        </div>
-      </div>
-
-      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <KpiTile label="Net YTD" tone={netYtd >= 0 ? 'moss' : 'ember'}>
-          <div className="mt-1.5 text-[24px] font-semibold tnum">
-            {netYtd >= 0 ? '+' : ''}
-            {currency(netYtd)}
+    <>
+      <div>
+        <div className="mb-4 flex items-baseline justify-between gap-4">
+          <div className="min-w-0 flex items-baseline gap-3">
+            <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
+              Phase 2
+            </span>
+            <h1 className="text-[18px] font-semibold tracking-tight text-ink">Cash flow</h1>
           </div>
-          <div className="mt-1 text-[11px] text-ink/50 tnum">
-            {months.length} month{months.length === 1 ? '' : 's'} · inflow − outflow
+          <div className="relative flex shrink-0 items-center gap-1 rounded-lg bg-ink/[0.05] p-0.5 text-[12px]">
+            <RangeButton active={activeRange === 'ytd'} onClick={() => onRangeChange('ytd')}>YTD</RangeButton>
+            <RangeButton active={activeRange === '12mo'} onClick={() => onRangeChange('12mo')}>12 mo</RangeButton>
+            <RangeButton active={activeRange === 'all'} onClick={() => onRangeChange('all')}>All</RangeButton>
+            <RangeButton
+              active={activeRange === 'custom'}
+              onClick={() => setCustomRangeOpen((v) => !v)}
+            >
+              Custom
+            </RangeButton>
+            {customRangeOpen && (
+              <CustomRangePopover
+                onApply={(r) => {
+                  setCustomRange(r);
+                  onRangeChange('custom');
+                  setCustomRangeOpen(false);
+                }}
+                onClose={() => setCustomRangeOpen(false)}
+              />
+            )}
           </div>
-        </KpiTile>
-        <KpiTile label="Avg monthly inflow">
-          <div className="mt-1.5 text-[24px] font-semibold tnum text-ink">{currency(avgInflow)}</div>
-          <div className="mt-1 text-[11px] text-ink/50">Over {months.length} months</div>
-        </KpiTile>
-        <KpiTile label="Avg monthly outflow">
-          <div className="mt-1.5 text-[24px] font-semibold tnum text-ink">{currency(avgOutflow)}</div>
-          <div className="mt-1 text-[11px] text-ink/50">Over {months.length} months</div>
-        </KpiTile>
+        </div>
+
+        <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <KpiTile label="Net YTD" tone={netYtd >= 0 ? 'moss' : 'ember'}>
+            <div className="mt-1.5 text-[24px] font-semibold tnum">
+              {netYtd >= 0 ? '+' : ''}
+              {currency(netYtd)}
+            </div>
+            <div className="mt-1 text-[11px] text-ink/50 tnum">
+              {months.length} month{months.length === 1 ? '' : 's'} · inflow − outflow
+            </div>
+          </KpiTile>
+          <KpiTile label="Avg monthly inflow">
+            <div className="mt-1.5 text-[24px] font-semibold tnum text-ink">{currency(avgInflow)}</div>
+            {inflowDelta ? (
+              <div className="mt-1 flex items-baseline gap-1 text-[11px] tnum">
+                <span className={inflowDelta.delta >= 0 ? 'text-moss' : 'text-ember'}>
+                  {inflowDelta.delta >= 0 ? '+' : ''}
+                  {(inflowDelta.delta * 100).toFixed(1)}%
+                </span>
+                <span className="text-ink/45">{inflowDelta.label}</span>
+              </div>
+            ) : (
+              <div className="mt-1 text-[11px] text-ink/45">no comparison yet</div>
+            )}
+          </KpiTile>
+          <KpiTile label="Avg monthly outflow">
+            <div className="mt-1.5 text-[24px] font-semibold tnum text-ink">{currency(avgOutflow)}</div>
+            {outflowDelta ? (
+              <div className="mt-1 flex items-baseline gap-1 text-[11px] tnum">
+                {/* Rising outflow is bad → positive delta = ember */}
+                <span className={outflowDelta.delta <= 0 ? 'text-moss' : 'text-ember'}>
+                  {outflowDelta.delta >= 0 ? '+' : ''}
+                  {(outflowDelta.delta * 100).toFixed(1)}%
+                </span>
+                <span className="text-ink/45">{outflowDelta.label}</span>
+              </div>
+            ) : (
+              <div className="mt-1 text-[11px] text-ink/45">no comparison yet</div>
+            )}
+          </KpiTile>
+        </div>
+
+        <FeasibilitySection assessment={feasibility} />
+
+        <div
+          className="grid gap-5"
+          style={{ gridTemplateColumns: 'minmax(0, 1.45fr) minmax(0, 1fr)' }}
+        >
+          <CashFlowChart months={months} chartMax={chartMax} yAxisLabels={yAxisLabels} />
+          <GatesPanel gates={gates} />
+        </div>
+
+        <HysaTrajectorySection trajectory={hysaTrajectory} />
+
+        <ReconciliationSection periods={reconciliations} />
+
+        <LeakageSection categories={leakageCategories} onOpenDrawer={openDrawer} />
+
+        <SubscriptionAuditSection entries={subscriptionAudit} />
+
+        <TransactionRegisterSection />
       </div>
 
-      <FeasibilitySection assessment={feasibility} />
-
-      <div
-        className="grid gap-5"
-        style={{ gridTemplateColumns: 'minmax(0, 1.45fr) minmax(0, 1fr)' }}
-      >
-        <CashFlowChart months={months} chartMax={chartMax} yAxisLabels={yAxisLabels} />
-        <GatesPanel gates={gates} />
-      </div>
-
-      <HysaTrajectorySection trajectory={hysaTrajectory} />
-
-      <ReconciliationSection periods={reconciliations} />
-
-      <LeakageSection categories={leakageCategories} />
-
-      <SubscriptionAuditSection entries={subscriptionAudit} />
-
-      <TransactionRegisterSection />
-    </div>
+      <TransactionDrawer
+        open={drawerOpen}
+        categoryKey={drawerCategory?.key ?? null}
+        categoryName={drawerCategory?.name ?? null}
+        range={drawerRange}
+        onClose={() => setDrawerOpen(false)}
+      />
+    </>
   );
 }
 
@@ -620,6 +806,9 @@ function CashFlowChart({
   chartMax: number;
   yAxisLabels: number[];
 }) {
+  const [hovered, setHovered] = useState<number | null>(null);
+  const colCount = Math.max(months.length, 1);
+
   return (
     <section className="rounded-xl border border-ink/8 bg-white shadow-card">
       <div className="flex items-center justify-between gap-4 px-5 pt-5 pb-3">
@@ -645,50 +834,137 @@ function CashFlowChart({
 
       <div className="px-5 pb-5">
         <div className="relative">
+          {/* Y-axis labels */}
           <div className="absolute inset-y-0 left-0 flex w-10 flex-col justify-between py-1 text-right text-[10px] text-ink/35 tnum">
             {yAxisLabels.map((value) => (
               <span key={value}>{formatAxisLabel(value)}</span>
             ))}
           </div>
+
+          {/* Bar columns */}
           <div
             className="ml-12 grid gap-6"
-            style={{ gridTemplateColumns: `repeat(${Math.max(months.length, 1)}, minmax(0, 1fr))` }}
+            style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}
           >
-            {months.map((month) => (
-              <MonthBars key={month.label} month={month} chartMax={chartMax} />
-            ))}
+            {months.map((month, i) => {
+              const inflowHeight = chartMax === 0 ? 0 : (month.inflow / chartMax) * 160;
+              const outflowHeight = chartMax === 0 ? 0 : (month.outflow / chartMax) * 160;
+              const isHovered = hovered === i;
+              return (
+                <button
+                  key={month.label}
+                  type="button"
+                  onMouseEnter={() => setHovered(i)}
+                  onMouseLeave={() => setHovered(null)}
+                  onFocus={() => setHovered(i)}
+                  onBlur={() => setHovered(null)}
+                  className={`flex h-48 w-full items-end justify-center gap-2 rounded-md transition-colors ${
+                    isHovered ? 'bg-ink/[0.03]' : ''
+                  }`}
+                >
+                  <div
+                    className="w-7 rounded-t-md bg-moss transition-opacity"
+                    style={{
+                      height: `${inflowHeight}px`,
+                      opacity: hovered !== null && !isHovered ? 0.55 : 1,
+                    }}
+                  />
+                  <div
+                    className="w-7 rounded-t-md bg-clay transition-opacity"
+                    style={{
+                      height: `${outflowHeight}px`,
+                      opacity: hovered !== null && !isHovered ? 0.55 : 1,
+                    }}
+                  />
+                </button>
+              );
+            })}
           </div>
+
+          {/* Shared hover tooltip – anchored to column index, not mouse coords */}
+          {hovered !== null && months[hovered] && (
+            <ChartTooltip
+              month={months[hovered]}
+              anchorIndex={hovered}
+              total={colCount}
+            />
+          )}
+
           <div className="ml-12 mt-2 h-px w-[calc(100%-3rem)] bg-ink/10" />
         </div>
+
+        {/* X-axis labels */}
         <div
           className="ml-12 mt-2 grid gap-6 text-center text-[11px] font-medium text-ink/55"
-          style={{ gridTemplateColumns: `repeat(${Math.max(months.length, 1)}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}
         >
           {months.map((m) => (
             <div key={m.label}>{m.label}</div>
           ))}
+        </div>
+
+        {/* Net-by-month strip */}
+        <div
+          className="ml-12 mt-3 grid gap-6"
+          style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}
+        >
+          {months.map((m) => {
+            const net = m.inflow - m.outflow;
+            const positive = net >= 0;
+            return (
+              <div
+                key={m.label}
+                className={`rounded py-1 text-center text-[11px] font-semibold tnum ${
+                  positive ? 'bg-moss/10 text-moss' : 'bg-ember/10 text-ember'
+                }`}
+              >
+                {positive ? '+' : ''}
+                {(net / 1000).toFixed(1)}k
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>
   );
 }
 
-function MonthBars({ month, chartMax }: { month: CashFlowMonth; chartMax: number }) {
-  const inflowHeight = chartMax === 0 ? 0 : (month.inflow / chartMax) * 160;
-  const outflowHeight = chartMax === 0 ? 0 : (month.outflow / chartMax) * 160;
+function ChartTooltip({
+  month,
+  anchorIndex,
+  total,
+}: {
+  month: CashFlowMonth;
+  anchorIndex: number;
+  total: number;
+}) {
+  const net = month.inflow - month.outflow;
+  // Position centered on the column. The grid starts at ml-12 (3rem) from the
+  // left of the relative container; each column center is at 3rem + (i+0.5)/n * (100%-3rem).
+  const leftCalc = `calc(3rem + (100% - 3rem) * ${(anchorIndex + 0.5) / total})`;
   return (
-    <div className="flex h-48 items-end justify-center gap-2">
-      <div className="flex flex-col items-center gap-1">
-        <span className="text-[10px] font-medium text-ink/55 tnum">
-          {(month.inflow / 1000).toFixed(1)}k
+    <div
+      className="pointer-events-none absolute z-20 -translate-x-1/2 rounded-md bg-ink px-3 py-2 text-fog shadow-card"
+      style={{ left: leftCalc, top: '0', transform: 'translateX(-50%) translateY(-108%)' }}
+    >
+      <div className="text-[10px] uppercase tracking-[0.16em] text-fog/60">{month.label}</div>
+      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+        <span className="text-fog/70">Inflow</span>
+        <span className="text-right tnum text-moss">
+          ${month.inflow.toLocaleString()}
         </span>
-        <div className="w-7 rounded-t-md bg-moss" style={{ height: `${inflowHeight}px` }} />
-      </div>
-      <div className="flex flex-col items-center gap-1">
-        <span className="text-[10px] font-medium text-ink/55 tnum">
-          {(month.outflow / 1000).toFixed(1)}k
+        <span className="text-fog/70">Outflow</span>
+        <span className="text-right tnum text-clay">
+          ${month.outflow.toLocaleString()}
         </span>
-        <div className="w-7 rounded-t-md bg-clay" style={{ height: `${outflowHeight}px` }} />
+        <span className="border-t border-fog/15 pt-1 text-fog/70">Net</span>
+        <span
+          className={`border-t border-fog/15 pt-1 text-right tnum ${
+            net >= 0 ? 'text-moss' : 'text-ember'
+          }`}
+        >
+          {net >= 0 ? '+' : ''}${net.toLocaleString()}
+        </span>
       </div>
     </div>
   );
@@ -707,52 +983,77 @@ function GatesPanel({ gates }: { gates: LiquidityGate[] }) {
           </div>
         </div>
       </div>
-      <div className="space-y-4 px-5 pb-5">
+      <div className="space-y-2 px-5 pb-5">
         {gates.map((gate) => (
-          <GateCard key={gate.gateKey} gate={gate} />
+          <GateStrip key={gate.gateKey} gate={gate} />
         ))}
+        <RothProjectionSlot />
       </div>
     </section>
   );
 }
 
-function GateCard({ gate }: { gate: LiquidityGate }) {
+function GateStrip({ gate }: { gate: LiquidityGate }) {
   const rawProgress = gate.targetAmount === 0 ? 0 : gate.currentAmount / gate.targetAmount;
   const progress = Math.min(rawProgress, 1);
   const complete = rawProgress >= 1;
   return (
-    <div className="rounded-lg border border-ink/8 bg-paper/50 p-3.5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[13px] font-medium leading-snug text-ink">{gate.label}</p>
-          <p className="mt-0.5 text-[11px] uppercase tracking-[0.16em] text-ink/45">
+    <div className="rounded-lg border border-ink/8 bg-paper/50 px-3.5 py-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium leading-tight text-ink">{gate.label}</div>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink/45">
             Due {gate.targetDate}
-          </p>
+          </div>
         </div>
-        <span
-          className={cn(
-            'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tnum',
-            complete ? 'bg-moss/12 text-moss' : 'bg-tide/12 text-tide',
-          )}
-        >
-          {percent(progress)}
-        </span>
+        <div className="shrink-0 text-right">
+          <div className="text-[11px] text-ink/55 tnum">
+            {currency(gate.currentAmount)} / {currency(gate.targetAmount)}
+          </div>
+          <div
+            className={`text-[13px] font-semibold tnum ${complete ? 'text-moss' : 'text-tide'}`}
+          >
+            {percent(progress)}
+          </div>
+        </div>
       </div>
-      <div className="mt-3 h-1.5 w-full rounded-full bg-ink/[0.06]">
+      <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-ink/[0.06]">
         <div
-          className={cn('h-full rounded-full', complete ? 'bg-moss' : 'bg-tide')}
+          className={`h-full rounded-full ${complete ? 'bg-moss' : 'bg-tide'}`}
           style={{ width: `${progress * 100}%` }}
         />
-      </div>
-      <div className="mt-2 flex items-center justify-between text-[11px] text-ink/55 tnum">
-        <span>{currency(gate.currentAmount)} current</span>
-        <span>{currency(gate.targetAmount)} target</span>
       </div>
     </div>
   );
 }
 
-function LeakageSection({ categories }: { categories: LeakageCategory[] }) {
+function RothProjectionSlot() {
+  return (
+    <div className="rounded-lg border border-dashed border-ink/15 bg-paper/30 px-3.5 py-3">
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-medium leading-tight text-ink/55">
+            Roth re-engagement readiness
+          </div>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-ink/35">
+            Forward projection
+          </div>
+        </div>
+        <span className="shrink-0 rounded-full bg-ink/[0.04] px-2 py-0.5 text-[10px] text-ink/40">
+          Coming soon
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function LeakageSection({
+  categories,
+  onOpenDrawer,
+}: {
+  categories: LeakageCategory[];
+  onOpenDrawer: (category: { key: string; name: string }) => void;
+}) {
   return (
     <section className="mt-5 rounded-xl border border-ink/8 bg-white shadow-card">
       <div className="flex items-center justify-between px-5 pt-5 pb-3">
@@ -767,14 +1068,24 @@ function LeakageSection({ categories }: { categories: LeakageCategory[] }) {
       </div>
       <div className="grid grid-cols-1 gap-3 px-5 pb-5 md:grid-cols-3">
         {categories.map((category) => (
-          <LeakageCard key={category.name} category={category} />
+          <LeakageCard
+            key={category.name}
+            category={category}
+            onOpenDrawer={onOpenDrawer}
+          />
         ))}
       </div>
     </section>
   );
 }
 
-function LeakageCard({ category }: { category: LeakageCategory }) {
+function LeakageCard({
+  category,
+  onOpenDrawer,
+}: {
+  category: LeakageCategory;
+  onOpenDrawer: (category: { key: string; name: string }) => void;
+}) {
   const ratio = category.cap === 0 ? 0 : category.monthlyBurn / category.cap;
   const overBy = category.monthlyBurn - category.cap;
   const overage = ratio > 1;
@@ -817,6 +1128,30 @@ function LeakageCard({ category }: { category: LeakageCategory }) {
           {overage ? <span className="text-ember"> · +{currency(overBy)} over</span> : null}
         </span>
       </div>
+
+      {category.categoryKey && (
+        <button
+          type="button"
+          onClick={() => onOpenDrawer({ key: category.categoryKey!, name: category.name })}
+          className="mt-3 inline-flex items-center gap-1 text-[11px] font-medium text-tide hover:text-ink"
+        >
+          See transactions
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 16 16"
+            width="10"
+            height="10"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="M3 8h10M9 4l4 4-4 4" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
