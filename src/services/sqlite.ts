@@ -316,6 +316,29 @@ export async function getDashboardSnapshot(range: DashboardRange = 'ytd'): Promi
     outflow: row.outflow ?? 0,
   }));
 
+  // Keep the HYSA gate current_amount in sync with the most recently
+  // reconciled savings-account balance. The UPDATE is a no-op when no
+  // reconciliation periods exist yet for savings accounts.
+  await database.execute(
+    `UPDATE liquidity_gates
+        SET current_amount = (
+          SELECT COALESCE(rp.statement_closing_balance, rp.computed_closing_balance)
+            FROM reconciliation_periods rp
+            JOIN accounts a ON a.id = rp.account_id
+           WHERE a.account_type = 'savings'
+             AND COALESCE(rp.statement_closing_balance, rp.computed_closing_balance) IS NOT NULL
+           ORDER BY rp.period_end DESC
+           LIMIT 1
+        )
+      WHERE gate_key = 'hysa-80000'
+        AND EXISTS (
+          SELECT 1 FROM reconciliation_periods rp
+          JOIN accounts a ON a.id = rp.account_id
+          WHERE a.account_type = 'savings'
+            AND COALESCE(rp.statement_closing_balance, rp.computed_closing_balance) IS NOT NULL
+        )`,
+  );
+
   const gates = await database.select<LiquidityGate>(
     `SELECT gate_key as gateKey, label, current_amount as currentAmount, target_amount as targetAmount, target_date as targetDate
        FROM liquidity_gates
