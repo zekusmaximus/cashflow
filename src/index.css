@@ -32,3 +32,16 @@ body {
 * {
   box-sizing: border-box;
 }
+
+/* ── Focus-ring polish ───────────────────────────────────────────────────────
+   2px tide outline visible on keyboard navigation; hidden on mouse/touch.     */
+*:focus-visible {
+  outline: 2px solid #2d5f73; /* tide */
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible {
+  outline-offset: 1px;
+}

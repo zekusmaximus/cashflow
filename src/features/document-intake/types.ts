@@ -51,3 +51,15 @@ export interface ChecklistDataset {
     categories: ChecklistCategorySummary[];
   };
 }
+
+export interface ChecklistFilter {
+  status: 'all' | 'open';
+  priority: 'all' | 'essential';
+  category: string | 'all';
+}
+
+export const DEFAULT_CHECKLIST_FILTER: ChecklistFilter = {
+  status: 'all',
+  priority: 'all',
+  category: 'all',
+};
