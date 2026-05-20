@@ -369,8 +369,8 @@ The Tauri command `list_leakage_transactions` is new. Its implementation reads f
 - [ ] Drawer respects `prefers-reduced-motion` (drop the slide animation if set)
 - [ ] Time-range control has 4 options now: YTD / 12mo / All / Custom
 - [ ] Custom opens a small popover with month + year selects for start/end
-- [ ] New Tauri command `list_leakage_transactions` is registered, capability declared (Tauri v2)
-- [ ] No new schema migrations
+- **New Tauri command** `list_leakage_transactions` is registered on the `invoke_handler` line. **No ACL / capability declaration is needed** for app-defined `#[tauri::command]` functions — they bypass the shell plugin's permission system. (Confirmed empirically in pass 03.)
+- No schema migrations
 - [ ] `npm test` passes
 - [ ] `npm run tauri dev` works end-to-end
 

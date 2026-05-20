@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseObtainedFlag } from '../features/document-intake/checklist';
+import { deriveCategoryId, parseObtainedFlag } from '../features/document-intake/checklist';
 
 describe('parseObtainedFlag', () => {
   it('treats "yes" / "true" as obtained', () => {
@@ -17,5 +17,17 @@ describe('parseObtainedFlag', () => {
     expect(parseObtainedFlag('')).toBe(false);
     expect(parseObtainedFlag('no')).toBe(false);
     expect(parseObtainedFlag('pending')).toBe(false);
+  });
+});
+
+describe('deriveCategoryId', () => {
+  it('extracts the single-letter prefix as the id', () => {
+    expect(deriveCategoryId('A. Core Transactions')).toBe('A');
+    expect(deriveCategoryId('b. Income & Payroll')).toBe('B');
+  });
+
+  it('falls back to the trimmed label when there is no prefix', () => {
+    expect(deriveCategoryId('Core Transactions')).toBe('Core Transactions');
+    expect(deriveCategoryId('  Misc  ')).toBe('Misc');
   });
 });

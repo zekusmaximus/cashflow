@@ -13,6 +13,7 @@ struct CandidateFile {
     stem: String,
     extension: String,
     parent_name: String,
+    modified_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -77,12 +78,18 @@ fn walk_root(dir: &Path, base: &Path, out: &mut Vec<CandidateFile>) {
                 .and_then(|p| p.file_name())
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64);
             out.push(CandidateFile {
                 relative_path: relative,
                 filename: name,
                 stem,
                 extension,
                 parent_name,
+                modified_ms,
             });
         }
     }
@@ -173,6 +180,34 @@ fn copy_to_watch_root(source_path: String) -> Result<CopyToWatchRootResult, Stri
     copy_to_watch_root_impl(&source, &watch_root)
 }
 
+/// Opens the OS file manager with `path` revealed/selected in its parent.
+///
+/// macOS `open -R` and Windows `explorer /select,` highlight the target inside
+/// its parent folder. Linux has no universal "select" verb, so `xdg-open`
+/// opens the folder itself (the closest equivalent).
+#[tauri::command]
+fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    use std::process::Command;
+
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("Path does not exist: {path}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").args(["-R", &path]).spawn();
+
+    #[cfg(target_os = "windows")]
+    let result = Command::new("explorer")
+        .arg(format!("/select,{path}"))
+        .spawn();
+
+    #[cfg(target_os = "linux")]
+    let result = Command::new("xdg-open").arg(&path).spawn();
+
+    result.map(|_| ()).map_err(|err| err.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -180,7 +215,8 @@ fn main() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             list_watch_root_files,
-            copy_to_watch_root
+            copy_to_watch_root,
+            reveal_in_file_manager
         ])
         .run(tauri::generate_context!())
         .expect("error while running Liquidity Gate");
