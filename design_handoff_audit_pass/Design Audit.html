@@ -1,0 +1,1218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Liquidity Gate — Design Audit</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink:   '#162126',
+          fog:   '#f3f0e8',
+          sand:  '#d2c4ad',
+          clay:  '#c7744f',
+          moss:  '#4e6a57',
+          tide:  '#2d5f73',
+          ember: '#8e392d',
+          paper: '#faf8f3',
+        },
+        fontFamily: {
+          sans: ['Inter', 'Aptos', 'Segoe UI', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        },
+        boxShadow: {
+          card: '0 1px 0 rgba(22,33,38,0.04), 0 8px 24px -16px rgba(22,33,38,0.18)',
+          rule: 'inset 0 -1px 0 rgba(22,33,38,0.08)',
+        },
+      },
+    },
+  };
+</script>
+<style>
+  :root { color: #162126; background: #faf8f3; }
+  html, body { background: #faf8f3; }
+  body { scrollbar-gutter: stable; }
+  .rule-b { box-shadow: inset 0 -1px 0 rgba(22,33,38,0.08); }
+  .rule-t { box-shadow: inset 0 1px 0 rgba(22,33,38,0.08); }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* tag chip swatches */
+  .tag-collapse { background: rgba(45,95,115,0.10); color: #2d5f73; }
+  .tag-remove   { background: rgba(142,57,45,0.10); color: #8e392d; }
+  .tag-add      { background: rgba(78,106,87,0.10); color: #4e6a57; }
+  .tag-fix      { background: rgba(199,116,79,0.12); color: #a85a36; }
+  .tag-recolor  { background: rgba(22,33,38,0.06);  color: #162126; }
+
+  /* severity rail */
+  .sev-high { background: linear-gradient(180deg, #8e392d, #c7744f); }
+  .sev-med  { background: linear-gradient(180deg, #c7744f, #d2c4ad); }
+  .sev-low  { background: rgba(22,33,38,0.18); }
+
+  /* micro-mock chrome */
+  .mock {
+    background: #faf8f3;
+    border-radius: 12px;
+    border: 1px dashed rgba(22,33,38,0.18);
+    padding: 12px;
+  }
+  .mock-label {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: rgba(22,33,38,0.45);
+  }
+
+  /* filtering */
+  body[data-filter] .finding { display: none; }
+  body[data-filter="all"]     .finding,
+  body[data-filter="collapse"] .finding[data-tag*="collapse"],
+  body[data-filter="remove"]   .finding[data-tag*="remove"],
+  body[data-filter="add"]      .finding[data-tag*="add"],
+  body[data-filter="fix"]      .finding[data-tag*="fix"],
+  body[data-filter="recolor"]  .finding[data-tag*="recolor"],
+  body[data-filter="high"]     .finding[data-sev="high"],
+  body[data-filter="med"]      .finding[data-sev="med"],
+  body[data-filter="low"]      .finding[data-sev="low"] { display: grid; }
+
+  /* anchor offset for sticky header */
+  section[id] { scroll-margin-top: 96px; }
+</style>
+</head>
+<body class="font-sans text-ink antialiased" data-filter="all">
+
+<!-- ─── Header ─── -->
+<header class="sticky top-0 z-30 bg-paper/90 backdrop-blur rule-b">
+  <div class="mx-auto flex max-w-[1180px] items-center gap-6 px-6 py-3">
+    <div class="flex items-center gap-2.5">
+      <div class="grid h-7 w-7 place-items-center rounded-md bg-ink text-fog">
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M2 13h12M4 10l2-4 2 3 2-5 2 6"/>
+        </svg>
+      </div>
+      <div class="leading-tight">
+        <div class="text-[13px] font-semibold tracking-tight">Liquidity Gate</div>
+        <div class="text-[10px] uppercase tracking-[0.18em] text-ink/45">Design audit · May 2026</div>
+      </div>
+    </div>
+
+    <nav class="ml-2 hidden items-center gap-1 text-[12px] text-ink/60 md:flex">
+      <a href="#summary" class="rounded-md px-2 py-1 hover:bg-ink/[0.05] hover:text-ink">Summary</a>
+      <a href="#chrome" class="rounded-md px-2 py-1 hover:bg-ink/[0.05] hover:text-ink">Chrome</a>
+      <a href="#intake" class="rounded-md px-2 py-1 hover:bg-ink/[0.05] hover:text-ink">Intake</a>
+      <a href="#dashboard" class="rounded-md px-2 py-1 hover:bg-ink/[0.05] hover:text-ink">Dashboard</a>
+      <a href="#cross" class="rounded-md px-2 py-1 hover:bg-ink/[0.05] hover:text-ink">Cross-cutting</a>
+      <a href="#proposal" class="rounded-md px-2 py-1 hover:bg-ink/[0.05] hover:text-ink">Proposal</a>
+      <a href="#roadmap" class="rounded-md px-2 py-1 hover:bg-ink/[0.05] hover:text-ink">Roadmap</a>
+    </nav>
+
+    <div class="ml-auto flex items-center gap-2">
+      <a href="redesign.html"
+         class="inline-flex items-center gap-1.5 rounded-full border border-ink/15 bg-white px-3 py-1.5 text-[12px] font-medium text-ink/75 hover:border-ink/35 hover:text-ink">
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+        Open redesign.html
+      </a>
+    </div>
+  </div>
+
+  <!-- filter strip -->
+  <div class="mx-auto max-w-[1180px] px-6 pb-3">
+    <div class="flex flex-wrap items-center gap-2 text-[11px]">
+      <span class="mr-1 text-[10px] uppercase tracking-[0.18em] text-ink/45">Filter</span>
+      <button data-filter-btn="all"      class="filter-btn rounded-full bg-ink px-2.5 py-1 font-medium text-fog">All findings</button>
+      <button data-filter-btn="collapse" class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">Collapse</button>
+      <button data-filter-btn="remove"   class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">Remove</button>
+      <button data-filter-btn="add"      class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">Add</button>
+      <button data-filter-btn="fix"      class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">Fix</button>
+      <button data-filter-btn="recolor"  class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">Re-color</button>
+      <span class="mx-2 h-3 w-px bg-ink/15"></span>
+      <button data-filter-btn="high"     class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">High severity</button>
+      <button data-filter-btn="med"      class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">Medium</button>
+      <button data-filter-btn="low"      class="filter-btn rounded-full bg-white px-2.5 py-1 font-medium text-ink/70 border border-ink/10 hover:border-ink/30">Low</button>
+    </div>
+  </div>
+</header>
+
+<main class="mx-auto max-w-[1180px] px-6 py-8">
+
+  <!-- ─── Title ─── -->
+  <div class="mb-10">
+    <div class="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">Audit · two views</div>
+    <h1 class="mt-1 text-[34px] font-semibold tracking-tight leading-[1.1]">A snappier Liquidity Gate</h1>
+    <p class="mt-3 max-w-[64ch] text-[14px] leading-relaxed text-ink/65">
+      The current pass is calm, well-tokenized, and fixes the overflow bugs called out in the handoff.
+      It also repeats data, hides primary actions, mixes color semantics, and front-loads chrome that delays the user from seeing what matters. This audit walks through every surface, calls out what to keep, what to collapse, and what to wire up — ending with a proposed condensed layout and a prioritized 4-step roadmap.
+    </p>
+    <div class="mt-5 grid grid-cols-4 gap-3">
+      <div class="rounded-xl border border-ink/8 bg-white p-3.5 shadow-card">
+        <div class="text-[10px] uppercase tracking-[0.18em] text-ink/50">Findings</div>
+        <div class="mt-1 text-[22px] font-semibold tnum" id="kFindings">—</div>
+      </div>
+      <div class="rounded-xl border border-ink/8 bg-white p-3.5 shadow-card">
+        <div class="text-[10px] uppercase tracking-[0.18em] text-clay">High severity</div>
+        <div class="mt-1 text-[22px] font-semibold tnum text-clay" id="kHigh">—</div>
+      </div>
+      <div class="rounded-xl border border-ink/8 bg-white p-3.5 shadow-card">
+        <div class="text-[10px] uppercase tracking-[0.18em] text-tide">Collapse moves</div>
+        <div class="mt-1 text-[22px] font-semibold tnum text-tide" id="kCollapse">—</div>
+      </div>
+      <div class="rounded-xl border border-ink/8 bg-white p-3.5 shadow-card">
+        <div class="text-[10px] uppercase tracking-[0.18em] text-moss">New affordances</div>
+        <div class="mt-1 text-[22px] font-semibold tnum text-moss" id="kAdd">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ SUMMARY ═══════════════ -->
+  <section id="summary" class="mb-14">
+    <div class="mb-4 flex items-baseline justify-between gap-4">
+      <div>
+        <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">Executive summary</div>
+        <h2 class="mt-1 text-[22px] font-semibold tracking-tight">Four moves to make it snappier</h2>
+      </div>
+      <span class="text-[11px] text-ink/50">Each links to detail below.</span>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <a href="#f-stat-dupes" class="group rounded-xl border border-ink/8 bg-white p-5 shadow-card hover:border-ink/20">
+        <div class="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-tide">
+          <span class="grid h-5 w-5 place-items-center rounded-md bg-tide/10 tnum">1</span> Stop repeating the same stat
+        </div>
+        <div class="mt-2 text-[15px] font-semibold leading-snug">Header pills + intake KPI tiles + watch-root counter all carry “23 / 86 obtained.” Pick one source-of-truth surface.</div>
+        <div class="mt-3 text-[12px] text-ink/55">Eliminates ~140px of vertical chrome above the table and gives the eye one place to track progress.</div>
+      </a>
+      <a href="#f-essentials-cta" class="group rounded-xl border border-ink/8 bg-white p-5 shadow-card hover:border-ink/20">
+        <div class="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-moss">
+          <span class="grid h-5 w-5 place-items-center rounded-md bg-moss/10 tnum">2</span> Surface the 9 essentials
+        </div>
+        <div class="mt-2 text-[15px] font-semibold leading-snug">“9 essential missing” is buried inside a stat tile. It’s the single most actionable number in the app — make it a primary CTA at the top of intake.</div>
+        <div class="mt-3 text-[12px] text-ink/55">One-click filter to the items that actually unblock the next phase. Replaces vague “Add item / Rescan folder” buttons.</div>
+      </a>
+      <a href="#f-color-conflict" class="group rounded-xl border border-ink/8 bg-white p-5 shadow-card hover:border-ink/20">
+        <div class="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-clay">
+          <span class="grid h-5 w-5 place-items-center rounded-md bg-clay/12 tnum">3</span> Unscramble the color semantics
+        </div>
+        <div class="mt-2 text-[15px] font-semibold leading-snug">Clay (#c7744f) currently means <i>missing</i>, <i>outflow</i>, and <i>HYSA progress</i>. Three different stories share one accent.</div>
+        <div class="mt-3 text-[12px] text-ink/55">Reassign: clay = expense/outflow only. Use ember for danger/missing, tide for neutral progress.</div>
+      </a>
+      <a href="#f-chart-density" class="group rounded-xl border border-ink/8 bg-white p-5 shadow-card hover:border-ink/20">
+        <div class="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-ember">
+          <span class="grid h-5 w-5 place-items-center rounded-md bg-ember/10 tnum">4</span> Quiet the chart, raise the signal
+        </div>
+        <div class="mt-2 text-[15px] font-semibold leading-snug">Ten floating numbers above bars compete with the bars themselves. Replace with hover-reveal + a single “Net by month” strip beneath.</div>
+        <div class="mt-3 text-[12px] text-ink/55">Lets you fit a 6th panel (trailing 3-mo net trend) in the same row without adding height.</div>
+      </a>
+    </div>
+  </section>
+
+  <!-- ═══════════════ CHROME ═══════════════ -->
+  <section id="chrome" class="mb-14">
+    <div class="mb-5 flex items-end justify-between gap-4 rule-b pb-3">
+      <div>
+        <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">Section 1</div>
+        <h2 class="mt-1 text-[22px] font-semibold tracking-tight">Top chrome & navigation</h2>
+      </div>
+      <span class="text-[11px] text-ink/50">5 findings</span>
+    </div>
+
+    <div class="grid gap-4">
+
+      <!-- Finding card template repeated -->
+      <article class="finding" id="f-stat-dupes" data-tag="collapse" data-sev="high" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-high"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-collapse">Collapse</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">High severity</span>
+            <span class="ml-auto text-[11px] text-ink/50">Intake & Dashboard</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Status numbers are echoed in three places</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            The sticky header carries <span class="font-mono text-ink">23 / 86 obtained · 63 missing · HYSA $46.2k / $80k</span>.
+            Below the H1, four KPI tiles re-state Tracked / Obtained / Missing / Categories.
+            The watch-root strip then announces <span class="font-mono text-ink">14 files indexed</span>.
+            That’s the same progress story told three times, eating ~190px of vertical real-estate before the actual checklist appears.
+          </p>
+
+          <div class="mt-4 grid grid-cols-2 gap-4">
+            <div class="mock">
+              <div class="mock-label mb-2">Current — three echoes</div>
+              <!-- pill row -->
+              <div class="flex items-center gap-3 rounded-md bg-paper px-2.5 py-1.5 text-[11px] text-ink/70">
+                <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-moss"></span><b class="tnum">23</b> / 86</span>
+                <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-clay"></span><b class="tnum">63</b> missing</span>
+                <span class="tnum">HYSA <b>$46.2k</b> / $80k</span>
+              </div>
+              <div class="mt-2 grid grid-cols-4 gap-2">
+                <div class="rounded-md border border-ink/8 bg-white px-2 py-1.5">
+                  <div class="text-[8px] uppercase tracking-[0.16em] text-ink/45">Tracked</div>
+                  <div class="text-[15px] font-semibold tnum">86</div>
+                </div>
+                <div class="rounded-md border border-ink/8 bg-white px-2 py-1.5">
+                  <div class="text-[8px] uppercase tracking-[0.16em] text-moss">Obtained</div>
+                  <div class="text-[15px] font-semibold tnum text-moss">23</div>
+                </div>
+                <div class="rounded-md border border-ink/8 bg-white px-2 py-1.5">
+                  <div class="text-[8px] uppercase tracking-[0.16em] text-clay">Missing</div>
+                  <div class="text-[15px] font-semibold tnum text-clay">63</div>
+                </div>
+                <div class="rounded-md border border-ink/8 bg-white px-2 py-1.5">
+                  <div class="text-[8px] uppercase tracking-[0.16em] text-ink/45">Categories</div>
+                  <div class="text-[15px] font-semibold tnum">9</div>
+                </div>
+              </div>
+              <div class="mt-2 flex items-center gap-2 rounded-md border border-ink/8 bg-white px-2.5 py-1.5 text-[11px] text-ink/65">
+                <span>Watching</span>
+                <span class="truncate font-mono text-ink/85">…/intake</span>
+                <span class="ml-auto tnum"><b>14</b> files indexed</span>
+              </div>
+            </div>
+
+            <div class="mock">
+              <div class="mock-label mb-2">Proposed — one progress object</div>
+              <div class="rounded-lg border border-ink/8 bg-white p-3">
+                <div class="flex items-baseline justify-between gap-3">
+                  <div>
+                    <div class="text-[10px] uppercase tracking-[0.16em] text-ink/45">Intake progress</div>
+                    <div class="mt-0.5 flex items-baseline gap-2">
+                      <span class="text-[22px] font-semibold tnum text-ink">23</span>
+                      <span class="text-[12px] text-ink/55">of 86 documents · <span class="font-semibold text-ember">9 essential missing</span></span>
+                    </div>
+                  </div>
+                  <button class="rounded-full bg-ember/10 px-2.5 py-1 text-[11px] font-semibold text-ember">Show essentials →</button>
+                </div>
+                <div class="mt-3 grid h-1.5 grid-cols-[27fr_63fr_10fr] gap-px overflow-hidden rounded-full bg-ink/[0.06]">
+                  <div class="bg-moss"></div><div class="bg-ink/10"></div><div class="bg-ember"></div>
+                </div>
+                <div class="mt-1.5 flex items-center justify-between text-[10px] text-ink/50 tnum">
+                  <span>27% obtained</span><span>63 missing · 9 essential</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-4 rounded-md bg-paper px-3 py-2 text-[12px] text-ink/65 rule-t">
+            <b class="font-semibold text-ink">Recommendation:</b> keep one progress object at the top of the intake view. Drop the header pills <i>on the intake view</i> (they’re fine on the dashboard view where they provide context-switching). Drop the “Categories: 9” tile — the sidebar already conveys that.
+          </div>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="remove" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-remove">Remove</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Header</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">The “Show notes” toggle is a preview affordance, not a product feature</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            It’s useful in <span class="font-mono text-ink">redesign.html</span> while reviewing the rationale, but in the shipped React app there’s nothing to annotate.
+            Strip it from the header — the saved real estate lets the brand mark + tabs breathe at narrower widths.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="collapse" data-sev="low" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-low"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-collapse">Collapse</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Low</span>
+            <span class="ml-auto text-[11px] text-ink/50">Header brand block</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Brand mark’s second line (“Local · 2026”) is decorative</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            “Local” is implicit — the app is a Tauri desktop binary by design. The year date is shown more usefully in the dashboard’s YTD / 12mo control. Drop the secondary line and use the recovered height to make the tab pills slightly bigger and easier to hit.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="add" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Header</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Surface the HYSA gate as a permanent micro-progress rail</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            HYSA gate progress is the single most important <i>cross-cutting</i> constraint in the app — it gates Phase 3 (Roth re-engagement). Keep a 4-pixel rail in the sticky header at all times, with the percentage tnum’d to its right. That earns its keep on both views and replaces the inline pill version.
+          </p>
+          <div class="mt-4 mock">
+            <div class="mock-label mb-2">Header rail (always-on)</div>
+            <div class="flex items-center gap-3 rounded-md bg-white px-3 py-2 border border-ink/8">
+              <div class="text-[11px] font-medium uppercase tracking-[0.14em] text-ink/55">HYSA gate</div>
+              <div class="h-1 flex-1 overflow-hidden rounded-full bg-ink/[0.06]">
+                <div class="h-full bg-tide" style="width:58%"></div>
+              </div>
+              <div class="text-[12px] font-semibold tnum">58%</div>
+              <div class="text-[11px] text-ink/45 tnum">$46.2k / $80k</div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="fix" data-sev="low" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-low"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-fix">Fix</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Low</span>
+            <span class="ml-auto text-[11px] text-ink/50">Tabs</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Tab labels read like form-field names</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            “Document intake” and “Cash-flow dashboard” are technically accurate but heavy. Shorten to <b>Intake</b> and <b>Cash flow</b>. The eyebrow inside each view already supplies the long form (“Phase 1 · Intake”).
+          </p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ═══════════════ INTAKE ═══════════════ -->
+  <section id="intake" class="mb-14">
+    <div class="mb-5 flex items-end justify-between gap-4 rule-b pb-3">
+      <div>
+        <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">Section 2</div>
+        <h2 class="mt-1 text-[22px] font-semibold tracking-tight">Document intake view</h2>
+      </div>
+      <span class="text-[11px] text-ink/50">6 findings</span>
+    </div>
+
+    <div class="grid gap-4">
+
+      <article class="finding" id="f-essentials-cta" data-tag="add" data-sev="high" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-high"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">High</span>
+            <span class="ml-auto text-[11px] text-ink/50">Above the checklist</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">The 9 essential-missing items deserve a primary CTA</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Today, “9 essential” is just a tiny caption inside the Missing tile. It’s the answer to “what should I do next?” and it’s smaller than the rescan button. Promote it to a one-line action band — clicking it pre-filters the table to Essential + Missing and scrolls to it.
+          </p>
+
+          <div class="mt-4 mock">
+            <div class="mock-label mb-2">Proposed action band</div>
+            <div class="flex items-center gap-3 rounded-lg border border-ember/30 bg-ember/[0.05] px-4 py-3">
+              <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-ember text-fog">
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 1.5l6.5 11.5h-13L8 1.5zM8 6v3M8 11v.01"/></svg>
+              </span>
+              <div class="min-w-0">
+                <div class="text-[13px] font-semibold text-ink">9 essential documents still missing</div>
+                <div class="text-[11px] text-ink/60">Tax returns, RSU vesting paystub, mortgage statements (rental), HELOC, car loan, life & LTD policies…</div>
+              </div>
+              <button class="ml-auto shrink-0 rounded-full bg-ember px-3 py-1.5 text-[12px] font-semibold text-fog hover:bg-ember/90">Start with essentials</button>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="remove" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-remove">Remove</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Top-right actions</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">“Rescan folder” duplicates the 5-second auto-scan</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            The watch-root strip already promises <span class="font-mono text-ink">Rescans every 5s</span>. A manual rescan button implies that the auto-scan isn’t trustworthy.
+            Either remove the button entirely, or — if there’s a real edge case — demote it to a small icon on the watch-root strip with a tooltip (“Force rescan now”).
+          </p>
+          <p class="mt-2 text-[12px] text-ink/55">
+            Same goes for “Add item” — the README implies the checklist comes from the tracker CSV. If users <i>do</i> sometimes add ad-hoc items, label the button truthfully (“Add custom item”) and move it inside the table’s toolbar where the related context lives.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="collapse" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-collapse">Collapse</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Checklist table</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">“Why needed” column eats 30% width for text users glance at once</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            The rationale text is genuinely valuable, but it’s read once per document and then forgotten. Collapse it behind a small <span class="font-mono text-ink">i</span> button per row, or expose it via row-expand. The reclaimed width lets the document column show matched files inline without truncation — which is where users actually spend their time.
+          </p>
+
+          <div class="mt-4 grid grid-cols-2 gap-4">
+            <div class="mock">
+              <div class="mock-label mb-2">Current row — 5 columns</div>
+              <div class="overflow-hidden rounded-md border border-ink/8 bg-white">
+                <div class="grid items-start gap-2 px-2.5 py-2 text-[11px]" style="grid-template-columns: 60px 1fr 70px 60px 30%">
+                  <span class="rounded-full bg-moss/12 px-1.5 py-0.5 text-[10px] font-medium text-moss text-center">Got it</span>
+                  <div class="min-w-0">
+                    <div class="truncate font-medium text-ink">Chase credit-card statements — 2026 YTD</div>
+                    <div class="font-mono text-[10px] text-ink/45 truncate">Chase_Credit_Card.csv · 1,247 tx</div>
+                  </div>
+                  <span class="text-[10px] text-ink/65">A. Core</span>
+                  <span class="rounded border border-ember/30 bg-ember/8 px-1.5 py-0.5 text-[9px] font-medium uppercase text-ember text-center">Essential</span>
+                  <span class="text-[10px] text-ink/55 leading-snug">Main discretionary and semi-discretionary spending source.</span>
+                </div>
+              </div>
+            </div>
+            <div class="mock">
+              <div class="mock-label mb-2">Proposed — 4 columns + expand</div>
+              <div class="overflow-hidden rounded-md border border-ink/8 bg-white">
+                <div class="grid items-center gap-2 px-2.5 py-2 text-[11px]" style="grid-template-columns: 60px 1fr 70px 60px 20px">
+                  <span class="rounded-full bg-moss/12 px-1.5 py-0.5 text-[10px] font-medium text-moss text-center">Got it</span>
+                  <div class="min-w-0">
+                    <div class="font-medium text-ink">Chase credit-card statements — 2026 YTD</div>
+                    <div class="font-mono text-[10px] text-ink/55">Chase_Credit_Card.csv · 0.92 · 1,247 tx</div>
+                  </div>
+                  <span class="text-[10px] text-ink/65">A. Core</span>
+                  <span class="rounded border border-ember/30 bg-ember/8 px-1.5 py-0.5 text-[9px] font-medium uppercase text-ember text-center">Essential</span>
+                  <button class="grid h-5 w-5 place-items-center rounded-md bg-ink/[0.06] text-ink/55 hover:bg-ink/[0.12]">
+                    <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6l4 4 4-4"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-4 rounded-md bg-paper px-3 py-2 text-[12px] text-ink/65 rule-t">
+            <b class="font-semibold text-ink">Bonus:</b> with the rationale collapsed, you can add a sixth column for <i>last-modified date of matched file</i> — a strong stale-data signal that doesn’t exist today.
+          </div>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="add" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Category sidebar</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Category sidebar should be the primary filter</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Right now the sidebar is read-only — purely informational. It’s perfectly placed to act as a filter rail: click <i>C. Debt & Housing</i> and the table narrows to those 12 items. The “All / Missing / Essential” pill in the table toolbar then composes on top.
+          </p>
+          <p class="mt-2 text-[12px] text-ink/55">
+            Secondary: the single-letter badges (A–I) without a legend feel arbitrary. Either drop them or show the letter at full size and use the long name as a tooltip when truncated.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="fix" data-sev="low" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-low"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-fix">Fix</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Low</span>
+            <span class="ml-auto text-[11px] text-ink/50">Watch-root strip</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Watch-root strip needs a “reveal in Finder” action</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            The path is shown read-only with monospaced styling, which signals "interactive thing" to most users — but clicking does nothing.
+            Add a small chevron that opens the folder in the OS file manager (you’re in Tauri; <span class="font-mono">shell::open</span> is a one-liner). Also add a copy-path icon. These two affordances together turn the strip from “status” into “tool.”
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="collapse" data-sev="low" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-low"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-collapse">Collapse</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Low</span>
+            <span class="ml-auto text-[11px] text-ink/50">Page title block</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Eyebrow + H1 + sentence is 3 lines for low-density information</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            On a fully-loaded screen, the eyebrow “Phase 1 · Intake” + H1 “Document checklist” + body sentence eat ~70px without conveying anything actionable.
+            Collapse to <b>“Phase 1 · Intake — Document checklist”</b> as a single 16px section title; move the explanatory sentence behind an info icon, or drop it entirely (the columns explain themselves).
+          </p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ═══════════════ DASHBOARD ═══════════════ -->
+  <section id="dashboard" class="mb-14">
+    <div class="mb-5 flex items-end justify-between gap-4 rule-b pb-3">
+      <div>
+        <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">Section 3</div>
+        <h2 class="mt-1 text-[22px] font-semibold tracking-tight">Cash-flow dashboard</h2>
+      </div>
+      <span class="text-[11px] text-ink/50">6 findings</span>
+    </div>
+
+    <div class="grid gap-4">
+
+      <article class="finding" id="f-chart-density" data-tag="fix" data-sev="high" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-high"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-fix">Fix</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">High</span>
+            <span class="ml-auto text-[11px] text-ink/50">Inflow/outflow chart</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Ten floating numbers above ten thin bars is visual noise</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Every bar carries its own value label (e.g. <span class="font-mono">19.2k</span>) directly above it.
+            At default density the numbers are louder than the bars they describe — and they all hover around the same magnitude (~$17–19k), so reading them doesn’t tell you anything you can’t see from the bar heights.
+            Replace with hover-reveal tooltips, and add a single <b>Net</b> mini-strip beneath the chart so the actually-interesting number (monthly delta) gets its own row.
+          </p>
+
+          <div class="mt-4 grid grid-cols-2 gap-4">
+            <div class="mock">
+              <div class="mock-label mb-2">Current — 10 labels stacked</div>
+              <div class="grid grid-cols-5 gap-3 h-32 items-end">
+                <div class="flex items-end gap-1 justify-center">
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">19.2k</span><div class="w-3 bg-moss rounded-t" style="height:92px"></div></div>
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">17.4k</span><div class="w-3 bg-clay rounded-t" style="height:84px"></div></div>
+                </div>
+                <div class="flex items-end gap-1 justify-center">
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">18.6k</span><div class="w-3 bg-moss rounded-t" style="height:89px"></div></div>
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">17.1k</span><div class="w-3 bg-clay rounded-t" style="height:82px"></div></div>
+                </div>
+                <div class="flex items-end gap-1 justify-center">
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">19.3k</span><div class="w-3 bg-moss rounded-t" style="height:93px"></div></div>
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">17.7k</span><div class="w-3 bg-clay rounded-t" style="height:85px"></div></div>
+                </div>
+                <div class="flex items-end gap-1 justify-center">
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">18.9k</span><div class="w-3 bg-moss rounded-t" style="height:90px"></div></div>
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">18.1k</span><div class="w-3 bg-clay rounded-t" style="height:87px"></div></div>
+                </div>
+                <div class="flex items-end gap-1 justify-center">
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">19.6k</span><div class="w-3 bg-moss rounded-t" style="height:94px"></div></div>
+                  <div class="flex flex-col items-center gap-0.5"><span class="text-[9px] text-ink/55 tnum">18.4k</span><div class="w-3 bg-clay rounded-t" style="height:88px"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mock">
+              <div class="mock-label mb-2">Proposed — bars + net strip</div>
+              <div class="grid grid-cols-5 gap-3 h-24 items-end">
+                <div class="flex items-end gap-1 justify-center"><div class="w-3 bg-moss rounded-t" style="height:80px"></div><div class="w-3 bg-clay rounded-t" style="height:72px"></div></div>
+                <div class="flex items-end gap-1 justify-center"><div class="w-3 bg-moss rounded-t" style="height:77px"></div><div class="w-3 bg-clay rounded-t" style="height:71px"></div></div>
+                <div class="flex items-end gap-1 justify-center"><div class="w-3 bg-moss rounded-t" style="height:80px"></div><div class="w-3 bg-clay rounded-t" style="height:74px"></div></div>
+                <div class="flex items-end gap-1 justify-center"><div class="w-3 bg-moss rounded-t" style="height:78px"></div><div class="w-3 bg-clay rounded-t" style="height:75px"></div></div>
+                <div class="flex items-end gap-1 justify-center"><div class="w-3 bg-moss rounded-t" style="height:81px"></div><div class="w-3 bg-clay rounded-t" style="height:76px"></div></div>
+              </div>
+              <div class="mt-2 grid grid-cols-5 gap-3 text-center">
+                <div class="rounded bg-moss/10 py-1 text-[10px] font-semibold tnum text-moss">+1,850</div>
+                <div class="rounded bg-moss/10 py-1 text-[10px] font-semibold tnum text-moss">+1,480</div>
+                <div class="rounded bg-moss/10 py-1 text-[10px] font-semibold tnum text-moss">+1,630</div>
+                <div class="rounded bg-moss/10 py-1 text-[10px] font-semibold tnum text-moss">+740</div>
+                <div class="rounded bg-moss/10 py-1 text-[10px] font-semibold tnum text-moss">+1,190</div>
+              </div>
+              <div class="mt-1 grid grid-cols-5 gap-3 text-center text-[10px] text-ink/55">
+                <div>Jan</div><div>Feb</div><div>Mar</div><div>Apr</div><div>May</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="finding" id="f-color-conflict" data-tag="recolor" data-sev="high" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-high"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-recolor">Re-color</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">High</span>
+            <span class="ml-auto text-[11px] text-ink/50">Cross-cutting</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Clay is doing three jobs at once</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            <span class="font-mono text-ink">#c7744f</span> currently represents <b>missing documents</b> (a warning), <b>monthly outflow</b> (neutral expense), and <b>HYSA gate progress</b> (a partially-complete goal).
+            These are three different stories, so the eye can’t learn what clay means.
+          </p>
+
+          <div class="mt-4 grid grid-cols-3 gap-3">
+            <div class="rounded-lg border border-ink/8 bg-paper/60 p-3">
+              <div class="text-[10px] uppercase tracking-[0.16em] text-ink/45">Today</div>
+              <div class="mt-2 space-y-1.5 text-[11px]">
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-clay"></span><span>Missing docs</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-clay"></span><span>Outflow</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-clay"></span><span>HYSA progress</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-ember"></span><span>Over-cap leakage</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-moss"></span><span>Obtained / inflow</span></div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-ink/8 bg-paper/60 p-3">
+              <div class="text-[10px] uppercase tracking-[0.16em] text-ink/45">Proposed</div>
+              <div class="mt-2 space-y-1.5 text-[11px]">
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-ember"></span><span>Missing / blocking</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-clay"></span><span>Outflow (only)</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-tide"></span><span>Progress in motion</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-ember"></span><span>Over-cap leakage</span></div>
+                <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-sm bg-moss"></span><span>Obtained / inflow / met</span></div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-ink/8 bg-paper/60 p-3">
+              <div class="text-[10px] uppercase tracking-[0.16em] text-ink/45">Mental model</div>
+              <div class="mt-2 space-y-2 text-[11px] text-ink/65">
+                <p><b class="text-moss">Moss</b> = it’s fine / received / income</p>
+                <p><b class="text-tide">Tide</b> = work in progress</p>
+                <p><b class="text-clay">Clay</b> = spending (neutral)</p>
+                <p><b class="text-ember">Ember</b> = blocked / over budget</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="collapse" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-collapse">Collapse</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Liquidity gates</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Two gates, two giant cards — the panel is half-empty</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            With only two gates, the stacked card-on-card layout feels padded. Each gate has a title, eyebrow date, big badge, rail, and two amounts — five rows of structure for one progress number. Tighten to a two-row strip per gate and use the saved height to fit a third forward-looking projection ("Roth re-engagement readiness by Q3 2026").
+          </p>
+
+          <div class="mt-4 mock">
+            <div class="mock-label mb-2">Proposed gate strip</div>
+            <div class="space-y-2">
+              <div class="rounded-lg border border-ink/8 bg-white px-3 py-2.5">
+                <div class="flex items-center gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-ink leading-tight">HYSA gate</div>
+                    <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Due 2026-12-31</div>
+                  </div>
+                  <div class="text-[11px] text-ink/55 tnum">$46.2k / $80k</div>
+                  <div class="text-[13px] font-semibold tnum">58%</div>
+                </div>
+                <div class="mt-2 h-1 w-full overflow-hidden rounded-full bg-ink/[0.06]">
+                  <div class="h-full bg-tide" style="width:58%"></div>
+                </div>
+              </div>
+              <div class="rounded-lg border border-ink/8 bg-white px-3 py-2.5">
+                <div class="flex items-center gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-ink leading-tight">Safe-harbor reserve</div>
+                    <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Due 2026-09-15</div>
+                  </div>
+                  <div class="text-[11px] text-ink/55 tnum">$11.25k / $18k</div>
+                  <div class="text-[13px] font-semibold tnum">63%</div>
+                </div>
+                <div class="mt-2 h-1 w-full overflow-hidden rounded-full bg-ink/[0.06]">
+                  <div class="h-full bg-tide" style="width:63%"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="fix" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-fix">Fix</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">KPI deltas</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">“+1.8% vs. Jan” is a misleading delta</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Comparing average monthly inflow to a single anchor month (January) hides the actual story.
+            If income drifted up in Feb then back down by May, the “vs. Jan” number can be positive while the trend is negative.
+            Use trailing 3-month vs. prior 3-month (or month-over-month with a sparkline), and label it explicitly: <i>“+1.8% vs. trailing 3-mo”</i>.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="add" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Leakage</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Leakage cards need a drill-down</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Today you can see <i>that</i> Amazon spend is 41% over cap, but not <i>which</i> transactions drove it. Add a “See transactions” affordance that pops a side panel listing the underlying entries for the current month — vendor, date, amount, category match score. This turns the dashboard from passive observation into a budget conversation.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="add" data-sev="low" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-low"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Low</span>
+            <span class="ml-auto text-[11px] text-ink/50">Time-range control</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Time-range pills should include a custom range</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            YTD / 12mo / All covers most needs, but the most common ad-hoc question is "show me April through June." A fourth pill — <b>Custom</b> — opens a small two-month-picker popover.
+          </p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ═══════════════ CROSS-CUTTING ═══════════════ -->
+  <section id="cross" class="mb-14">
+    <div class="mb-5 flex items-end justify-between gap-4 rule-b pb-3">
+      <div>
+        <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">Section 4</div>
+        <h2 class="mt-1 text-[22px] font-semibold tracking-tight">Cross-cutting</h2>
+      </div>
+      <span class="text-[11px] text-ink/50">4 findings</span>
+    </div>
+
+    <div class="grid gap-4">
+
+      <article class="finding" data-tag="add" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Keyboard</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">No keyboard surface — and this is a desktop app</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Tauri apps live or die by feeling native. Add at minimum: <span class="font-mono text-ink">⌘1 / ⌘2</span> to switch tabs, <span class="font-mono text-ink">⌘K</span> for a command palette (search docs by name, jump to category, filter to missing), <span class="font-mono text-ink">⌘R</span> to force rescan. A tiny hint cluster in the corner ("⌘K to search") signals the affordance exists.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="add" data-sev="med" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-med"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Medium</span>
+            <span class="ml-auto text-[11px] text-ink/50">Empty & loading states</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Empty states are missing from the mockup</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Today the redesign assumes data is present. Define what each surface looks like when:
+            (a) the watch folder doesn’t exist yet, (b) no documents have been matched, (c) the tracker CSV failed to parse, (d) the dashboard has less than one full month of transactions.
+            These are likely your day-one screens — and they’re harder to design than the populated ones.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="fix" data-sev="low" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-low"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-fix">Fix</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Low</span>
+            <span class="ml-auto text-[11px] text-ink/50">Density</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">Density is too loose for a power-user financial tool</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Many surfaces use <span class="font-mono text-ink">p-4 / p-5</span> on cards holding three rows of content. Drop to <span class="font-mono text-ink">p-3</span> and tighten the gap between rows. The README claims the goal is "compact" — the current spacing reads more like "Notion-comfortable" than "spreadsheet-dense." A user staring at this for an hour wants information density.
+          </p>
+        </div>
+      </article>
+
+      <article class="finding" data-tag="add" data-sev="low" style="display:grid;grid-template-columns:6px 1fr;gap:18px;">
+        <div class="rounded-full sev-low"></div>
+        <div class="rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] tag-add">Add</span>
+            <span class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Low</span>
+            <span class="ml-auto text-[11px] text-ink/50">Visual rhythm</span>
+          </div>
+          <h3 class="mt-2 text-[16px] font-semibold leading-snug">All surfaces are <span class="font-mono text-ink">bg-white</span> — there’s no figure/ground</h3>
+          <p class="mt-1.5 text-[13px] leading-relaxed text-ink/65">
+            Page is paper, every card is white. With nothing tinted, the eye doesn’t know which surface is "primary."
+            Use paper-tint (<span class="font-mono text-ink">bg-paper/60</span>) on secondary surfaces — gate strips, leakage cards — and keep pure white for the primary table and chart. Adds rhythm without adding chroma.
+          </p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ═══════════════ PROPOSED LAYOUT ═══════════════ -->
+  <section id="proposal" class="mb-14">
+    <div class="mb-5 flex items-end justify-between gap-4 rule-b pb-3">
+      <div>
+        <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">Section 5</div>
+        <h2 class="mt-1 text-[22px] font-semibold tracking-tight">Condensed layout sketch</h2>
+      </div>
+      <span class="text-[11px] text-ink/50">Wireframe — not pixel-final</span>
+    </div>
+
+    <p class="mb-5 max-w-[64ch] text-[13px] leading-relaxed text-ink/65">
+      What both views would look like with the top-4 moves applied. Compare the vertical space the user crosses before reaching content: current ~280px on intake, proposed ~120px.
+    </p>
+
+    <div class="grid grid-cols-2 gap-6">
+
+      <!-- Intake -->
+      <div>
+        <div class="mb-2 flex items-center justify-between">
+          <div class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">Intake — proposed</div>
+          <div class="text-[10px] text-ink/45 tnum font-mono">~120px chrome</div>
+        </div>
+        <div class="rounded-2xl border border-ink/10 bg-white p-3 shadow-card">
+          <!-- header rail -->
+          <div class="flex items-center gap-3 rounded-lg bg-paper px-3 py-2 text-[11px]">
+            <div class="grid h-5 w-5 place-items-center rounded bg-ink text-fog text-[9px] font-bold">LG</div>
+            <div class="flex items-center gap-1 rounded-full bg-ink/[0.05] p-0.5 text-[10px]">
+              <button class="rounded-full bg-white px-2 py-0.5 font-medium shadow-card">Intake</button>
+              <button class="px-2 py-0.5 text-ink/55">Cash flow</button>
+            </div>
+            <div class="ml-auto flex items-center gap-2 text-[10px] text-ink/55">
+              <span>HYSA</span>
+              <div class="h-0.5 w-16 overflow-hidden rounded-full bg-ink/[0.08]">
+                <div class="h-full bg-tide" style="width:58%"></div>
+              </div>
+              <span class="font-semibold text-ink tnum">58%</span>
+            </div>
+          </div>
+
+          <!-- progress object + CTA -->
+          <div class="mt-3 grid grid-cols-[1fr_auto] gap-3 rounded-lg border border-ink/8 px-3 py-2.5">
+            <div>
+              <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Intake progress</div>
+              <div class="mt-0.5 flex items-baseline gap-2">
+                <span class="text-[18px] font-semibold tnum">23 / 86</span>
+                <span class="text-[10px] text-ink/55">· <span class="font-semibold text-ember">9 essential missing</span></span>
+              </div>
+              <div class="mt-1.5 grid h-1 grid-cols-[27fr_64fr_9fr] gap-px overflow-hidden rounded-full bg-ink/[0.06]">
+                <div class="bg-moss"></div><div class="bg-ink/10"></div><div class="bg-ember"></div>
+              </div>
+            </div>
+            <button class="self-end rounded-full bg-ember px-2.5 py-1 text-[10px] font-semibold text-fog">Start essentials →</button>
+          </div>
+
+          <!-- watch root strip with actions -->
+          <div class="mt-2 flex items-center gap-2 rounded-lg border border-ink/8 bg-paper/60 px-2.5 py-1.5 text-[10px] text-ink/65">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-moss"></span>
+            <span class="truncate font-mono text-ink/80">/Users/jeff/.../intake</span>
+            <span class="ml-auto tnum"><b>14</b> indexed</span>
+            <button class="rounded p-1 hover:bg-ink/[0.06]"><svg viewBox="0 0 16 16" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="10" height="9"/><path d="M5 4V2h6v2"/></svg></button>
+            <button class="rounded p-1 hover:bg-ink/[0.06]"><svg viewBox="0 0 16 16" class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+          </div>
+
+          <!-- body -->
+          <div class="mt-3 grid gap-3" style="grid-template-columns: minmax(0, 110px) minmax(0, 1fr);">
+            <div class="rounded-lg border border-ink/8 bg-paper/40 p-2 text-[10px]">
+              <div class="text-[9px] uppercase tracking-[0.14em] text-ink/45">Categories</div>
+              <div class="mt-1.5 space-y-1">
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Core</span><span class="text-ink/45 tnum">6/10</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Income</span><span class="text-ink/45 tnum">4/10</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Debt</span><span class="text-ink/45 tnum">3/12</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Utilities</span><span class="text-ink/45 tnum">2/9</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Insurance</span><span class="text-ink/45 tnum">2/11</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Rental</span><span class="text-ink/45 tnum">1/10</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Medical</span><span class="text-ink/45 tnum">2/5</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Subs</span><span class="text-ink/45 tnum">1/8</span></div>
+                <div class="flex items-center justify-between gap-1.5"><span class="truncate">Tax</span><span class="text-ink/45 tnum">2/11</span></div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-ink/8 bg-white p-2 text-[10px]">
+              <!-- 4-col table -->
+              <div class="grid grid-cols-[50px_1fr_50px_18px] gap-1.5 border-b border-ink/8 pb-1.5 text-[8px] uppercase tracking-[0.14em] text-ink/45">
+                <div>Status</div><div>Document</div><div>Pri.</div><div></div>
+              </div>
+              <div class="mt-1 grid grid-cols-[50px_1fr_50px_18px] items-center gap-1.5 py-1 text-[9px]">
+                <span class="rounded bg-moss/12 px-1 py-0.5 text-center text-moss font-medium">Got</span>
+                <span class="truncate">Chase CC statements</span>
+                <span class="rounded border border-ember/30 bg-ember/8 px-1 text-center text-ember font-medium">Ess</span>
+                <span class="text-ink/45">›</span>
+              </div>
+              <div class="grid grid-cols-[50px_1fr_50px_18px] items-center gap-1.5 py-1 text-[9px]">
+                <span class="rounded bg-clay/12 px-1 py-0.5 text-center text-clay font-medium">Miss</span>
+                <span class="truncate">Ashley separate checking</span>
+                <span class="rounded border border-ember/30 bg-ember/8 px-1 text-center text-ember font-medium">Ess</span>
+                <span class="text-ink/45">›</span>
+              </div>
+              <div class="grid grid-cols-[50px_1fr_50px_18px] items-center gap-1.5 py-1 text-[9px]">
+                <span class="rounded bg-moss/12 px-1 py-0.5 text-center text-moss font-medium">Got</span>
+                <span class="truncate">Ally HYSA statements</span>
+                <span class="rounded border border-ember/30 bg-ember/8 px-1 text-center text-ember font-medium">Ess</span>
+                <span class="text-ink/45">›</span>
+              </div>
+              <div class="grid grid-cols-[50px_1fr_50px_18px] items-center gap-1.5 py-1 text-[9px]">
+                <span class="rounded bg-clay/12 px-1 py-0.5 text-center text-clay font-medium">Miss</span>
+                <span class="truncate">Tesla / car loan statements</span>
+                <span class="rounded border border-ember/30 bg-ember/8 px-1 text-center text-ember font-medium">Ess</span>
+                <span class="text-ink/45">›</span>
+              </div>
+              <div class="grid grid-cols-[50px_1fr_50px_18px] items-center gap-1.5 py-1 text-[9px]">
+                <span class="rounded bg-moss/12 px-1 py-0.5 text-center text-moss font-medium">Got</span>
+                <span class="truncate">Fidelity HSA statements</span>
+                <span class="rounded border border-ink/15 bg-ink/[0.04] px-1 text-center text-ink/65 font-medium">Use</span>
+                <span class="text-ink/45">›</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard -->
+      <div>
+        <div class="mb-2 flex items-center justify-between">
+          <div class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">Cash flow — proposed</div>
+          <div class="text-[10px] text-ink/45 tnum font-mono">~110px chrome</div>
+        </div>
+        <div class="rounded-2xl border border-ink/10 bg-white p-3 shadow-card">
+          <!-- header rail -->
+          <div class="flex items-center gap-3 rounded-lg bg-paper px-3 py-2 text-[11px]">
+            <div class="grid h-5 w-5 place-items-center rounded bg-ink text-fog text-[9px] font-bold">LG</div>
+            <div class="flex items-center gap-1 rounded-full bg-ink/[0.05] p-0.5 text-[10px]">
+              <button class="px-2 py-0.5 text-ink/55">Intake</button>
+              <button class="rounded-full bg-white px-2 py-0.5 font-medium shadow-card">Cash flow</button>
+            </div>
+            <div class="ml-auto flex items-center gap-2 text-[10px] text-ink/55">
+              <span>HYSA</span>
+              <div class="h-0.5 w-16 overflow-hidden rounded-full bg-ink/[0.08]">
+                <div class="h-full bg-tide" style="width:58%"></div>
+              </div>
+              <span class="font-semibold text-ink tnum">58%</span>
+            </div>
+          </div>
+
+          <!-- KPIs -->
+          <div class="mt-3 grid grid-cols-3 gap-2">
+            <div class="rounded-lg border border-ink/8 bg-white p-2.5">
+              <div class="text-[9px] uppercase tracking-[0.14em] text-ink/50">Net YTD</div>
+              <div class="mt-0.5 text-[16px] font-semibold tnum text-moss">+$7,890</div>
+              <div class="text-[9px] text-ink/45">5 months</div>
+            </div>
+            <div class="rounded-lg border border-ink/8 bg-white p-2.5">
+              <div class="text-[9px] uppercase tracking-[0.14em] text-ink/50">Avg in / out</div>
+              <div class="mt-0.5 text-[13px] font-semibold tnum"><span class="text-moss">$19.1k</span> / <span class="text-clay">$17.7k</span></div>
+              <div class="text-[9px] text-moss">+1.8% vs. trail. 3mo</div>
+            </div>
+            <div class="rounded-lg border border-ink/8 bg-white p-2.5">
+              <div class="text-[9px] uppercase tracking-[0.14em] text-ink/50">Range</div>
+              <div class="mt-1 flex items-center gap-1 rounded bg-ink/[0.05] p-0.5 text-[9px]">
+                <button class="rounded bg-white px-1.5 py-0.5 font-medium shadow-card">YTD</button>
+                <button class="px-1.5 py-0.5 text-ink/55">12mo</button>
+                <button class="px-1.5 py-0.5 text-ink/55">All</button>
+                <button class="px-1.5 py-0.5 text-ink/55">Custom</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- chart + gates -->
+          <div class="mt-2 grid grid-cols-[1.6fr_1fr] gap-2">
+            <div class="rounded-lg border border-ink/8 bg-white p-2">
+              <div class="text-[9px] uppercase tracking-[0.14em] text-ink/45">Inflow vs. outflow</div>
+              <div class="mt-2 grid h-16 grid-cols-5 items-end gap-2">
+                <div class="flex items-end gap-0.5 justify-center"><div class="w-2.5 bg-moss rounded-t" style="height:54px"></div><div class="w-2.5 bg-clay rounded-t" style="height:48px"></div></div>
+                <div class="flex items-end gap-0.5 justify-center"><div class="w-2.5 bg-moss rounded-t" style="height:52px"></div><div class="w-2.5 bg-clay rounded-t" style="height:48px"></div></div>
+                <div class="flex items-end gap-0.5 justify-center"><div class="w-2.5 bg-moss rounded-t" style="height:54px"></div><div class="w-2.5 bg-clay rounded-t" style="height:50px"></div></div>
+                <div class="flex items-end gap-0.5 justify-center"><div class="w-2.5 bg-moss rounded-t" style="height:53px"></div><div class="w-2.5 bg-clay rounded-t" style="height:51px"></div></div>
+                <div class="flex items-end gap-0.5 justify-center"><div class="w-2.5 bg-moss rounded-t" style="height:55px"></div><div class="w-2.5 bg-clay rounded-t" style="height:52px"></div></div>
+              </div>
+              <div class="mt-1 grid grid-cols-5 gap-2 text-center">
+                <div class="rounded bg-moss/10 py-0.5 text-[8px] font-semibold tnum text-moss">+1.85k</div>
+                <div class="rounded bg-moss/10 py-0.5 text-[8px] font-semibold tnum text-moss">+1.48k</div>
+                <div class="rounded bg-moss/10 py-0.5 text-[8px] font-semibold tnum text-moss">+1.63k</div>
+                <div class="rounded bg-moss/10 py-0.5 text-[8px] font-semibold tnum text-moss">+740</div>
+                <div class="rounded bg-moss/10 py-0.5 text-[8px] font-semibold tnum text-moss">+1.19k</div>
+              </div>
+              <div class="mt-0.5 grid grid-cols-5 gap-2 text-center text-[8px] text-ink/55">
+                <div>Jan</div><div>Feb</div><div>Mar</div><div>Apr</div><div>May</div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-ink/8 bg-paper/60 p-2">
+              <div class="text-[9px] uppercase tracking-[0.14em] text-ink/45">Gates</div>
+              <div class="mt-1.5 space-y-1.5">
+                <div class="rounded border border-ink/8 bg-white px-2 py-1.5">
+                  <div class="flex items-center justify-between text-[9px]">
+                    <span class="font-medium text-ink">HYSA gate</span>
+                    <span class="font-semibold tnum">58%</span>
+                  </div>
+                  <div class="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-ink/[0.08]"><div class="h-full bg-tide" style="width:58%"></div></div>
+                </div>
+                <div class="rounded border border-ink/8 bg-white px-2 py-1.5">
+                  <div class="flex items-center justify-between text-[9px]">
+                    <span class="font-medium text-ink">Safe harbor</span>
+                    <span class="font-semibold tnum">63%</span>
+                  </div>
+                  <div class="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-ink/[0.08]"><div class="h-full bg-tide" style="width:63%"></div></div>
+                </div>
+                <div class="rounded border border-ink/8 bg-white px-2 py-1.5">
+                  <div class="flex items-center justify-between text-[9px]">
+                    <span class="font-medium text-ink">Roth Q3</span>
+                    <span class="font-semibold tnum text-ember">blocked</span>
+                  </div>
+                  <div class="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-ink/[0.08]"><div class="h-full bg-ember" style="width:20%"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- leakage -->
+          <div class="mt-2 rounded-lg border border-ink/8 bg-paper/40 p-2">
+            <div class="flex items-center justify-between">
+              <div class="text-[9px] uppercase tracking-[0.14em] text-ember">Lifestyle leakage</div>
+              <div class="text-[9px] text-ink/55">3 over cap · <button class="underline">see all tx</button></div>
+            </div>
+            <div class="mt-1.5 grid grid-cols-3 gap-2 text-[9px]">
+              <div class="rounded border border-ink/8 bg-white p-1.5">
+                <div class="flex items-center justify-between"><span class="font-medium">Dining</span><span class="font-semibold text-ember tnum">+38%</span></div>
+                <div class="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-ink/[0.06]"><div class="flex h-full"><div class="bg-clay" style="width:72%"></div><div class="bg-ember" style="width:28%"></div></div></div>
+              </div>
+              <div class="rounded border border-ink/8 bg-white p-1.5">
+                <div class="flex items-center justify-between"><span class="font-medium">Amazon</span><span class="font-semibold text-ember tnum">+42%</span></div>
+                <div class="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-ink/[0.06]"><div class="flex h-full"><div class="bg-clay" style="width:71%"></div><div class="bg-ember" style="width:29%"></div></div></div>
+              </div>
+              <div class="rounded border border-ink/8 bg-white p-1.5">
+                <div class="flex items-center justify-between"><span class="font-medium">Pets</span><span class="font-semibold text-ember tnum">+28%</span></div>
+                <div class="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-ink/[0.06]"><div class="flex h-full"><div class="bg-clay" style="width:78%"></div><div class="bg-ember" style="width:22%"></div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ ROADMAP ═══════════════ -->
+  <section id="roadmap" class="mb-16">
+    <div class="mb-5 flex items-end justify-between gap-4 rule-b pb-3">
+      <div>
+        <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">Section 6</div>
+        <h2 class="mt-1 text-[22px] font-semibold tracking-tight">Prioritized roadmap</h2>
+      </div>
+      <span class="text-[11px] text-ink/50">Order by impact-per-effort</span>
+    </div>
+
+    <ol class="grid gap-3">
+      <li class="grid grid-cols-[40px_1fr_120px_120px] items-start gap-4 rounded-xl border border-ink/8 bg-white p-4 shadow-card">
+        <div class="grid h-9 w-9 place-items-center rounded-lg bg-ember text-fog text-[15px] font-semibold tnum">1</div>
+        <div>
+          <div class="text-[14px] font-semibold text-ink">Unify the progress story</div>
+          <div class="mt-0.5 text-[12px] text-ink/60">Drop the duplicate KPI tiles and watch-root counter; introduce one progress object + essentials CTA above the table. Removes ~140px of chrome.</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Impact</div>
+          <div class="mt-0.5 text-[12px] font-semibold text-ember">High</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Effort</div>
+          <div class="mt-0.5 text-[12px] font-semibold">Small · ~½ day</div>
+        </div>
+      </li>
+      <li class="grid grid-cols-[40px_1fr_120px_120px] items-start gap-4 rounded-xl border border-ink/8 bg-white p-4 shadow-card">
+        <div class="grid h-9 w-9 place-items-center rounded-lg bg-ember text-fog text-[15px] font-semibold tnum">2</div>
+        <div>
+          <div class="text-[14px] font-semibold text-ink">Re-assign color semantics</div>
+          <div class="mt-0.5 text-[12px] text-ink/60">Clay = outflow only. Tide = progress. Ember = blocked / over cap. Pure token reshuffle across both views; no logic changes.</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Impact</div>
+          <div class="mt-0.5 text-[12px] font-semibold text-ember">High</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Effort</div>
+          <div class="mt-0.5 text-[12px] font-semibold">Small · 1–2 hrs</div>
+        </div>
+      </li>
+      <li class="grid grid-cols-[40px_1fr_120px_120px] items-start gap-4 rounded-xl border border-ink/8 bg-white p-4 shadow-card">
+        <div class="grid h-9 w-9 place-items-center rounded-lg bg-clay text-fog text-[15px] font-semibold tnum">3</div>
+        <div>
+          <div class="text-[14px] font-semibold text-ink">Make the sidebar a filter & collapse "Why needed"</div>
+          <div class="mt-0.5 text-[12px] text-ink/60">Clicking a category narrows the table. "Why needed" moves behind a row-expand. Reclaimed width hosts a last-modified column.</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Impact</div>
+          <div class="mt-0.5 text-[12px] font-semibold text-clay">Medium</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Effort</div>
+          <div class="mt-0.5 text-[12px] font-semibold">Medium · 1 day</div>
+        </div>
+      </li>
+      <li class="grid grid-cols-[40px_1fr_120px_120px] items-start gap-4 rounded-xl border border-ink/8 bg-white p-4 shadow-card">
+        <div class="grid h-9 w-9 place-items-center rounded-lg bg-clay text-fog text-[15px] font-semibold tnum">4</div>
+        <div>
+          <div class="text-[14px] font-semibold text-ink">Quiet the chart, add a Net strip + drill-down for leakage</div>
+          <div class="mt-0.5 text-[12px] text-ink/60">Move per-bar labels to hover tooltips, add a net-by-month row beneath the chart, wire "see transactions" on leakage cards.</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Impact</div>
+          <div class="mt-0.5 text-[12px] font-semibold text-clay">Medium</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Effort</div>
+          <div class="mt-0.5 text-[12px] font-semibold">Medium · 1–2 days</div>
+        </div>
+      </li>
+      <li class="grid grid-cols-[40px_1fr_120px_120px] items-start gap-4 rounded-xl border border-ink/8 bg-white p-4 shadow-card">
+        <div class="grid h-9 w-9 place-items-center rounded-lg bg-ink text-fog text-[15px] font-semibold tnum">5</div>
+        <div>
+          <div class="text-[14px] font-semibold text-ink">Add keyboard surface (⌘K palette, ⌘1/⌘2 tab switch)</div>
+          <div class="mt-0.5 text-[12px] text-ink/60">Earns "snappy" outright. Most users will discover it once and never touch the mouse again.</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Impact</div>
+          <div class="mt-0.5 text-[12px] font-semibold text-ink/70">Med-High</div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-[0.14em] text-ink/45">Effort</div>
+          <div class="mt-0.5 text-[12px] font-semibold">Medium · 1 day</div>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <footer class="mb-10 rounded-xl border border-ink/8 bg-white p-5 shadow-card">
+    <div class="flex flex-wrap items-baseline justify-between gap-3">
+      <div>
+        <div class="text-[10px] uppercase tracking-[0.18em] text-ink/45">What this audit deliberately did <i>not</i> touch</div>
+        <p class="mt-1 max-w-[64ch] text-[12px] leading-relaxed text-ink/65">
+          The matcher logic, SQLite schema, Tauri bridges, and TanStack Query plumbing. Same as the README's stance: only the visual / interaction layer needs revisiting. If you want, I can apply the top-2 moves directly to <span class="font-mono text-ink">redesign.html</span> as the next step.
+        </p>
+      </div>
+      <a href="redesign.html" class="shrink-0 rounded-full bg-ink px-4 py-1.5 text-[12px] font-medium text-fog hover:bg-tide">Compare against redesign.html →</a>
+    </div>
+  </footer>
+
+</main>
+
+<script>
+  // ─── filter ───
+  const buttons = document.querySelectorAll('[data-filter-btn]');
+  buttons.forEach(b => {
+    b.addEventListener('click', () => {
+      document.body.dataset.filter = b.dataset.filterBtn;
+      buttons.forEach(x => {
+        const active = x === b;
+        x.classList.toggle('bg-ink', active);
+        x.classList.toggle('text-fog', active);
+        x.classList.toggle('bg-white', !active);
+        x.classList.toggle('text-ink/70', !active);
+        x.classList.toggle('border', !active);
+        x.classList.toggle('border-ink/10', !active);
+      });
+    });
+  });
+
+  // ─── summary stats ───
+  const findings = document.querySelectorAll('.finding');
+  document.getElementById('kFindings').textContent = findings.length;
+  document.getElementById('kHigh').textContent =
+    document.querySelectorAll('.finding[data-sev="high"]').length;
+  document.getElementById('kCollapse').textContent =
+    document.querySelectorAll('.finding[data-tag*="collapse"]').length;
+  document.getElementById('kAdd').textContent =
+    document.querySelectorAll('.finding[data-tag*="add"]').length;
+</script>
+</body>
+</html>
