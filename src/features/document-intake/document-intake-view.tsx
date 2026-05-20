@@ -1,20 +1,13 @@
-import { useState } from 'react';
-import { useQueryClient, type UseQueryResult } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
+import { type UseQueryResult } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Check,
-  CheckCircle2,
   FileText,
   Folder,
-  LayoutGrid,
-  Loader2,
-  Plus,
-  Search,
-  ScanLine,
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { useTransactionCounts } from '../../hooks/use-transaction-counts';
-import { isTauriRuntime } from '../../lib/tauri';
 import { cn } from '../../lib/utils';
 import type {
   ChecklistCategorySummary,
@@ -27,52 +20,34 @@ interface DocumentIntakeViewProps {
   query: UseQueryResult<ChecklistDataset, Error>;
 }
 
+interface ChecklistFilter {
+  status: 'all' | 'open';
+  priority: 'all' | 'essential';
+}
+
+const DEFAULT_CHECKLIST_FILTER: ChecklistFilter = {
+  status: 'all',
+  priority: 'all',
+};
+
+function isEssentialItem(item: ChecklistItem): boolean {
+  return item.priority.includes('Essential');
+}
+
+function matchesChecklistFilter(item: ChecklistItem, filter: ChecklistFilter): boolean {
+  if (filter.status === 'open' && item.obtained) {
+    return false;
+  }
+  if (filter.priority === 'essential' && !isEssentialItem(item)) {
+    return false;
+  }
+  return true;
+}
+
 export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
   const transactionCountsQuery = useTransactionCounts();
-  const queryClient = useQueryClient();
-  const tauriRuntime = isTauriRuntime();
-  const [uploadState, setUploadState] = useState<
-    { kind: 'idle' } | { kind: 'busy' } | { kind: 'error'; message: string } | { kind: 'success'; filename: string }
-  >({ kind: 'idle' });
-
-  const handleAddSource = async () => {
-    setUploadState({ kind: 'busy' });
-    try {
-      const [{ open }, { invoke }] = await Promise.all([
-        import('@tauri-apps/plugin-dialog'),
-        import('@tauri-apps/api/core'),
-      ]);
-      const selected = await open({
-        multiple: false,
-        directory: false,
-        filters: [{ name: 'Statements & exports', extensions: ['csv', 'pdf'] }],
-      });
-      if (selected === null) {
-        setUploadState({ kind: 'idle' });
-        return;
-      }
-      const sourcePath = Array.isArray(selected) ? selected[0] : selected;
-      if (typeof sourcePath !== 'string') {
-        setUploadState({ kind: 'idle' });
-        return;
-      }
-      const result = await invoke<{ filename: string; destination: string }>(
-        'copy_to_watch_root',
-        { sourcePath },
-      );
-      await queryClient.invalidateQueries({ queryKey: ['document-checklist'] });
-      setUploadState({ kind: 'success', filename: result.filename });
-    } catch (err) {
-      setUploadState({
-        kind: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  };
-
-  const handleRescan = () => {
-    void queryClient.invalidateQueries({ queryKey: ['document-checklist'] });
-  };
+  const tableRef = useRef<HTMLDivElement | null>(null);
+  const [filter, setFilter] = useState<ChecklistFilter>(DEFAULT_CHECKLIST_FILTER);
 
   if (query.isLoading) {
     return <LoadingState />;
@@ -88,138 +63,136 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
 
   const { items, summary, watchRoot } = query.data;
   const transactionCounts = transactionCountsQuery.data ?? new Map<string, number>();
-  const coreItems = items.filter((item) => item.priority.includes('Essential'));
+  const coreItems = items.filter(isEssentialItem);
+  const coreSources = coreItems.length;
   const coreReady = coreItems.filter((item) => item.obtained).length;
-  const coreOpen = coreItems.length - coreReady;
-  const additionalContextOpen = items.filter(
-    (item) => !item.obtained && !item.priority.includes('Essential'),
-  ).length;
-  const coreReadyPercent =
-    coreItems.length === 0
-      ? 0
-      : Math.round((coreReady / coreItems.length) * 100);
+  const openLater = items.filter((item) => !item.obtained && !isEssentialItem(item)).length;
+  const essentialsGap = Math.max(0, coreSources - coreReady);
+
+  const handleStartWithEssentials = () => {
+    setFilter({ status: 'open', priority: 'essential' });
+    tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
     <div>
-      <div className="mb-5 flex items-end justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
-            Phase 1 · Sources
-          </div>
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink">
-            Financial sources
-          </h1>
-          <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-ink/60">
-            Start with core transaction exports. Optional enrichment and deferred planning
-            files can come later.
-          </p>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleAddSource}
-              disabled={!tauriRuntime || uploadState.kind === 'busy'}
-              title={
-                tauriRuntime
-                  ? 'Pick a CSV or PDF and copy it into the watch root'
-                  : 'File upload is only available inside the Tauri desktop app'
-              }
-              className="inline-flex items-center gap-1.5 rounded-full border border-ink/15 bg-white px-3 py-1.5 text-[12px] font-medium text-ink/75 hover:border-ink/35 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {uploadState.kind === 'busy' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Plus className="h-3.5 w-3.5" />
-              )}
-              Add source
-            </button>
-            <button
-              type="button"
-              onClick={handleRescan}
-              className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1.5 text-[12px] font-medium text-fog hover:bg-tide"
-            >
-              <ScanLine className="h-3.5 w-3.5" />
-              Rescan folder
-            </button>
-          </div>
-          {uploadState.kind === 'success' ? (
-            <div className="text-[11px] text-moss">
-              Added <span className="font-mono">{uploadState.filename}</span> to the watch root.
-            </div>
-          ) : uploadState.kind === 'error' ? (
-            <div className="max-w-[320px] text-right text-[11px] text-ember">
-              {uploadState.message}
-            </div>
-          ) : null}
-        </div>
+      <div className="mb-2 flex items-baseline gap-3">
+        <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
+          Phase 1
+        </span>
+        <h1 className="text-[18px] font-semibold tracking-tight text-ink">Source intake</h1>
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <MetricTile icon={Search} label="Core sources" value={coreItems.length} caption="spending baseline" />
-        <MetricTile
-          icon={CheckCircle2}
-          label="Core ready"
-          value={coreReady}
-          tone="moss"
-          caption={`${coreReadyPercent}%`}
+      <div className="mb-4 grid gap-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)] lg:items-start">
+        <IntakeProgress
+          coreReady={coreReady}
+          coreSources={coreSources}
+          openLater={openLater}
         />
-        <MetricTile
-          icon={AlertTriangle}
-          label="Core open"
-          value={coreOpen}
-          tone={coreOpen > 0 ? 'clay' : 'moss'}
-          caption="needed for baseline"
-        />
-        <MetricTile
-          icon={LayoutGrid}
-          label="Later context"
-          value={additionalContextOpen}
-          caption="optional / deferred"
-        />
-      </div>
 
-      <WatchRootStrip status={watchRoot} />
+        <div className="space-y-2">
+          <EssentialsBanner count={essentialsGap} onStart={handleStartWithEssentials} />
+          <WatchRootStrip status={watchRoot} />
+        </div>
+      </div>
 
       <div
         className="grid gap-5"
         style={{ gridTemplateColumns: 'minmax(0, 280px) minmax(0, 1fr)' }}
       >
         <CategorySidebar categories={summary.categories} />
-        <ChecklistTable items={items} transactionCounts={transactionCounts} />
+        <div ref={tableRef}>
+          <ChecklistTable
+            items={items}
+            transactionCounts={transactionCounts}
+            filter={filter}
+            onFilterChange={setFilter}
+          />
+        </div>
       </div>
     </div>
   );
 }
 
-interface MetricTileProps {
-  icon: typeof Search;
-  label: string;
-  value: number;
-  tone?: 'moss' | 'clay';
-  caption?: string;
+interface IntakeProgressProps {
+  coreReady: number;
+  coreSources: number;
+  openLater: number;
 }
 
-function MetricTile({ icon: Icon, label, value, tone, caption }: MetricTileProps) {
-  const labelToneClass =
-    tone === 'moss' ? 'text-moss' : tone === 'clay' ? 'text-clay' : 'text-ink/50';
-  const valueToneClass =
-    tone === 'moss' ? 'text-moss' : tone === 'clay' ? 'text-clay' : 'text-ink';
+function IntakeProgress({ coreReady, coreSources, openLater }: IntakeProgressProps) {
+  const essentialsGap = Math.max(0, coreSources - coreReady);
+  const railTotal = coreSources > 0 ? coreReady + essentialsGap + openLater : 0;
+  const readyPct = coreSources === 0 ? 0 : Math.round((coreReady / coreSources) * 100);
   return (
-    <div className="rounded-xl border border-ink/8 bg-white p-3.5 shadow-card">
+    <div className="rounded-xl border border-ink/8 bg-white px-4 py-3 shadow-card">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <div className="min-w-0 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Intake progress
+          </span>
+          <span className="text-[18px] font-semibold tnum text-ink">
+            {coreReady} / {coreSources}
+          </span>
+          <span className="text-[12px] text-ink/55">core ready</span>
+          {essentialsGap > 0 ? (
+            <span className="text-[12px] font-semibold text-ember">
+              {essentialsGap} essential open
+            </span>
+          ) : null}
+        </div>
+        <span className="text-[11px] text-ink/50 tnum">{openLater} open later</span>
+      </div>
+
       <div
-        className={cn(
-          'flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.18em]',
-          labelToneClass,
-        )}
+        className="mt-2 grid h-1.5 gap-px overflow-hidden rounded-full bg-ink/[0.06]"
+        style={{
+          gridTemplateColumns: `${railTotal === 0 ? 0 : coreReady}fr ${railTotal === 0 ? 0 : essentialsGap}fr ${railTotal === 0 ? 0 : openLater}fr`,
+        }}
       >
-        <Icon className="h-3 w-3" />
-        {label}
+        <div className="bg-moss" />
+        <div className="bg-ember" />
+        <div className="bg-ink/10" />
       </div>
-      <div className="mt-1.5 flex items-baseline gap-2">
-        <span className={cn('text-[22px] font-semibold tnum', valueToneClass)}>{value}</span>
-        {caption ? <span className="text-[11px] text-ink/45 tnum">{caption}</span> : null}
+
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[10px] text-ink/50 tnum">
+        <span>{readyPct}% core ready</span>
+        <span>
+          {essentialsGap} essential open · {openLater} open later
+        </span>
       </div>
+    </div>
+  );
+}
+
+interface EssentialsBannerProps {
+  count: number;
+  onStart: () => void;
+}
+
+function EssentialsBanner({ count, onStart }: EssentialsBannerProps) {
+  if (count === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-ember/30 bg-ember/[0.05] px-3.5 py-2.5 shadow-card">
+      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ember text-fog">
+        <AlertTriangle className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0 text-[12px] leading-relaxed text-ink/65">
+        <span className="font-semibold text-ink">
+          {count} essential {count === 1 ? 'source' : 'sources'} still open
+        </span>{' '}
+        Start with the items that unblock the baseline cash-flow read.
+      </div>
+      <button
+        type="button"
+        onClick={onStart}
+        className="ml-auto shrink-0 rounded-full bg-ember px-3 py-1 text-[11px] font-semibold text-fog hover:bg-ember/90"
+      >
+        Start with essentials
+      </button>
     </div>
   );
 }
@@ -227,7 +200,7 @@ function MetricTile({ icon: Icon, label, value, tone, caption }: MetricTileProps
 function WatchRootStrip({ status }: { status: WatchRootStatus }) {
   if (!status.root) {
     return (
-      <div className="mb-6 rounded-xl border border-ink/8 bg-white px-3.5 py-2.5 text-[12px] text-ink/55 shadow-card">
+      <div className="rounded-xl border border-ink/8 bg-white px-3.5 py-2.5 text-[12px] text-ink/55 shadow-card">
         Filesystem matching is only active inside the Tauri desktop app.
       </div>
     );
@@ -236,7 +209,7 @@ function WatchRootStrip({ status }: { status: WatchRootStatus }) {
   const stateLabel = ok ? 'Watching' : 'Missing';
   const iconBgClass = ok ? 'bg-moss/12 text-moss' : 'bg-ember/12 text-ember';
   return (
-    <div className="mb-6 flex items-center gap-3 rounded-xl border border-ink/8 bg-white px-3.5 py-2.5 shadow-card">
+    <div className="flex items-center gap-3 rounded-xl border border-ink/8 bg-white px-3.5 py-2.5 shadow-card">
       <span
         className={cn(
           'grid h-6 w-6 shrink-0 place-items-center rounded-md',
@@ -324,11 +297,49 @@ function CategorySidebar({ categories }: { categories: ChecklistCategorySummary[
 interface ChecklistTableProps {
   items: ChecklistItem[];
   transactionCounts: Map<string, number>;
+  filter: ChecklistFilter;
+  onFilterChange: (filter: ChecklistFilter) => void;
 }
 
-function ChecklistTable({ items, transactionCounts }: ChecklistTableProps) {
+function ChecklistTable({ items, transactionCounts, filter, onFilterChange }: ChecklistTableProps) {
+  const filteredItems = items.filter((item) => matchesChecklistFilter(item, filter));
+  const isDefaultFilter =
+    filter.status === DEFAULT_CHECKLIST_FILTER.status &&
+    filter.priority === DEFAULT_CHECKLIST_FILTER.priority;
+
   return (
     <section className="relative min-w-0 overflow-hidden rounded-xl border border-ink/8 bg-white shadow-card">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink/[0.08] px-4 py-3">
+        <span className="text-[11px] text-ink/50 tnum">
+          {filteredItems.length} of {items.length} sources
+        </span>
+        <div className="flex flex-wrap items-center gap-1">
+          <ChecklistFilterButton
+            active={isDefaultFilter}
+            onClick={() => onFilterChange(DEFAULT_CHECKLIST_FILTER)}
+          >
+            All
+          </ChecklistFilterButton>
+          <ChecklistFilterButton
+            active={filter.status === 'open' && filter.priority === 'all'}
+            onClick={() => onFilterChange({ status: 'open', priority: 'all' })}
+          >
+            Open
+          </ChecklistFilterButton>
+          <ChecklistFilterButton
+            active={filter.status === 'open' && filter.priority === 'essential'}
+            onClick={() => onFilterChange({ status: 'open', priority: 'essential' })}
+          >
+            Essential open
+          </ChecklistFilterButton>
+        </div>
+      </div>
+
+      {filteredItems.length === 0 ? (
+        <div className="px-4 py-6 text-[12px] text-ink/55">
+          No sources match the current filter.
+        </div>
+      ) : (
       <div className="max-h-[640px] overflow-auto">
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <colgroup>
@@ -351,7 +362,7 @@ function ChecklistTable({ items, transactionCounts }: ChecklistTableProps) {
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {filteredItems.map((item) => (
               <ChecklistRow
                 key={item.id}
                 item={item}
@@ -361,7 +372,31 @@ function ChecklistTable({ items, transactionCounts }: ChecklistTableProps) {
           </tbody>
         </table>
       </div>
+      )}
     </section>
+  );
+}
+
+function ChecklistFilterButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors',
+        active ? 'bg-ink text-fog' : 'bg-ink/[0.05] text-ink/60 hover:text-ink',
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -372,7 +407,7 @@ function ChecklistRow({
   item: ChecklistItem;
   transactionCounts: Map<string, number>;
 }) {
-  const isEssential = item.priority.includes('Essential');
+  const isEssential = isEssentialItem(item);
   const isDeferred = item.priority.includes('Deferred');
   return (
     <tr
@@ -398,14 +433,14 @@ function ChecklistRow({
             className={cn(
               'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium',
               isEssential
-                ? 'bg-clay/12 text-clay'
+                ? 'bg-ember/12 text-ember'
                 : 'bg-ink/[0.06] text-ink/55',
             )}
           >
             <span
               className={cn(
                 'h-1.5 w-1.5 rounded-full',
-                isEssential ? 'bg-clay' : 'bg-ink/35',
+                isEssential ? 'bg-ember' : 'bg-ink/35',
               )}
             />
             Open

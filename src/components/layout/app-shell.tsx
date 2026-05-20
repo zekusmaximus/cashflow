@@ -6,9 +6,6 @@ export type AppView = 'intake' | 'dashboard';
 interface AppShellProps extends PropsWithChildren {
   view: AppView;
   onViewChange: (view: AppView) => void;
-  coreSources: number;
-  coreReady: number;
-  openLater: number;
   liquidityGateCurrent: number;
   liquidityGate: number;
 }
@@ -17,9 +14,6 @@ export function AppShell({
   children,
   view,
   onViewChange,
-  coreSources,
-  coreReady,
-  openLater,
   liquidityGateCurrent,
   liquidityGate,
 }: AppShellProps) {
@@ -32,13 +26,7 @@ export function AppShell({
         <div className="mx-auto flex max-w-[1280px] items-center gap-6 px-6 py-3">
           <BrandMark />
           <TabNav view={view} onViewChange={onViewChange} />
-          <StatusPills
-            coreReady={coreReady}
-            coreSources={coreSources}
-            openLater={openLater}
-            gateCurrent={liquidityGateCurrent}
-            gateTarget={liquidityGate}
-          />
+          <HysaRail current={liquidityGateCurrent} target={liquidityGate} />
         </div>
       </header>
 
@@ -62,10 +50,7 @@ function BrandMark() {
           <path d="M3 11h10M3 7h10M5 4v9M11 4v9" />
         </svg>
       </div>
-      <div className="leading-tight">
-        <div className="text-[13px] font-semibold tracking-tight text-ink">Liquidity Gate</div>
-        <div className="text-[10px] uppercase tracking-[0.18em] text-ink/45">Local · 2026</div>
-      </div>
+      <div className="text-[13px] font-semibold tracking-tight text-ink">Liquidity Gate</div>
     </div>
   );
 }
@@ -82,7 +67,7 @@ function TabNav({ view, onViewChange }: TabNavProps) {
         Source intake
       </TabButton>
       <TabButton active={view === 'dashboard'} onClick={() => onViewChange('dashboard')}>
-        Cash-flow dashboard
+        Cash flow
       </TabButton>
     </nav>
   );
@@ -109,32 +94,24 @@ function TabButton({ active, onClick, children }: TabButtonProps) {
   );
 }
 
-interface StatusPillsProps {
-  coreReady: number;
-  coreSources: number;
-  openLater: number;
-  gateCurrent: number;
-  gateTarget: number;
+interface HysaRailProps {
+  current: number;
+  target: number;
 }
 
-function StatusPills({ coreReady, coreSources, openLater, gateCurrent, gateTarget }: StatusPillsProps) {
+function HysaRail({ current, target }: HysaRailProps) {
+  const ratio = target <= 0 ? 0 : Math.min(Math.max(current / target, 0), 1);
   return (
-    <div className="ml-auto hidden items-center gap-5 text-[12px] text-ink/65 lg:flex">
-      <div className="flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 rounded-full bg-moss" />
-        <span className="tnum">
-          <b className="font-semibold text-ink">{coreReady}</b> / {coreSources} core ready
-        </span>
+    <div className="ml-auto hidden items-center gap-3 lg:flex">
+      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-ink/55">
+        HYSA gate
       </div>
-      <div className="flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 rounded-full bg-ink/35" />
-        <span className="tnum">
-          <b className="font-semibold text-ink">{openLater}</b> open later
-        </span>
+      <div className="h-1 w-32 overflow-hidden rounded-full bg-ink/[0.08]">
+        <div className="h-full bg-tide" style={{ width: `${ratio * 100}%` }} />
       </div>
-      <div className="h-4 w-px bg-ink/15" />
-      <div className="tnum">
-        HYSA gate <b className="font-semibold text-ink">{currency(gateCurrent)}</b> / {currency(gateTarget)}
+      <div className="text-[12px] font-semibold text-ink tnum">{Math.round(ratio * 100)}%</div>
+      <div className="text-[11px] text-ink/45 tnum">
+        {currency(current)} / {currency(target)}
       </div>
     </div>
   );

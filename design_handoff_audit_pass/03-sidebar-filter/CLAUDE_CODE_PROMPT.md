@@ -6,7 +6,7 @@ Paste this into Claude Code running inside the `liquidity-gate` repo.
 
 ---
 
-I'm applying the third visual + interaction pass from the audit handoff. The spec lives at `design_handoff_audit_pass/03-sidebar-filter/SPEC.md`. Please:
+I'm applying the third visual + interaction pass from the audit handoff. The spec lives at `design_handoff_audit_pass/03-sidebar-filter/SPEC.md`. The SPEC is written against the live codebase vocabulary that pass 02 settled (`'open'` / `'ready'` status, `isEssential` priority, "Source intake" tab) — adapt any literal that differs from what pass 02 actually wrote. Please:
 
 1. **Read the SPEC end to end** before touching any code. It covers four changes: (a) converting the read-only category sidebar into a clickable filter rail, (b) collapsing the "Why needed" column into a row-expand, (c) adding a new "Last modified" column, (d) wiring reveal-in-Finder and copy-path actions onto the watch-root strip via a new Tauri command.
 

@@ -6,7 +6,7 @@ Paste this into Claude Code running inside the `liquidity-gate` repo.
 
 ---
 
-I'm applying the fifth and final pass from the audit handoff. The spec lives at `design_handoff_audit_pass/05-keyboard-surface/SPEC.md`. Please:
+I'm applying the fifth and final pass from the audit handoff. The spec lives at `design_handoff_audit_pass/05-keyboard-surface/SPEC.md`. The SPEC uses the live codebase vocabulary (`'open'` / `'ready'` status, `isEssential` priority, `Source intake` tab label) — adapt any filter literal that differs from what pass 02/03 actually wrote. Please:
 
 1. **Read the SPEC end to end.** It covers four pieces: (a) a `⌘K` command palette with fuzzy search, (b) global keyboard shortcuts for tab switching + force rescan, (c) a dismissible bottom-right hint pill, (d) consistent focus-ring styles app-wide.
 

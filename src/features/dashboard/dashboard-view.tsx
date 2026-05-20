@@ -86,11 +86,6 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
   const netYtd = totalInflow - totalOutflow;
   const avgInflow = months.length === 0 ? 0 : totalInflow / months.length;
   const avgOutflow = months.length === 0 ? 0 : totalOutflow / months.length;
-  const primaryGate = gates[0];
-  const gateProgress =
-    primaryGate && primaryGate.targetAmount > 0
-      ? Math.min(primaryGate.currentAmount / primaryGate.targetAmount, 1)
-      : 0;
 
   const dataMax = Math.max(0, ...months.flatMap((m) => [m.inflow, m.outflow]));
   const chartMax = Math.max(20000, Math.ceil(dataMax / 5000) * 5000);
@@ -104,17 +99,12 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
 
   return (
     <div>
-      <div className="mb-5 flex items-end justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
-            Phase 2 · Reconstruction
-          </div>
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink">
-            Cash-flow dashboard
-          </h1>
-          <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-ink/60">
-            Reconstructed from the local transactions table. Transfers excluded.
-          </p>
+      <div className="mb-4 flex items-baseline justify-between gap-4">
+        <div className="min-w-0 flex items-baseline gap-3">
+          <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            Phase 2
+          </span>
+          <h1 className="text-[18px] font-semibold tracking-tight text-ink">Cash flow</h1>
         </div>
         <div className="flex shrink-0 items-center gap-1 rounded-lg bg-ink/[0.05] p-0.5 text-[12px]">
           <RangeButton active={activeRange === 'ytd'} onClick={() => onRangeChange('ytd')}>YTD</RangeButton>
@@ -123,7 +113,7 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
         <KpiTile label="Net YTD" tone={netYtd >= 0 ? 'moss' : 'ember'}>
           <div className="mt-1.5 text-[24px] font-semibold tnum">
             {netYtd >= 0 ? '+' : ''}
@@ -140,28 +130,6 @@ export function DashboardView({ query, activeRange, onRangeChange }: DashboardVi
         <KpiTile label="Avg monthly outflow">
           <div className="mt-1.5 text-[24px] font-semibold tnum text-ink">{currency(avgOutflow)}</div>
           <div className="mt-1 text-[11px] text-ink/50">Over {months.length} months</div>
-        </KpiTile>
-        <KpiTile label="HYSA gate">
-          {primaryGate ? (
-            <>
-              <div className="mt-1.5 flex items-baseline gap-2">
-                <span className="text-[24px] font-semibold tnum">
-                  {percent(gateProgress)}
-                </span>
-                <span className="text-[11px] text-ink/45 tnum">
-                  {currency(primaryGate.currentAmount)} / {currency(primaryGate.targetAmount)}
-                </span>
-              </div>
-              <div className="mt-2 h-1 w-full rounded-full bg-ink/[0.06]">
-                <div
-                  className="h-full rounded-full bg-clay"
-                  style={{ width: `${gateProgress * 100}%` }}
-                />
-              </div>
-            </>
-          ) : (
-            <div className="mt-1.5 text-[13px] text-ink/45">No gates configured.</div>
-          )}
         </KpiTile>
       </div>
 
@@ -764,7 +732,7 @@ function GateCard({ gate }: { gate: LiquidityGate }) {
         <span
           className={cn(
             'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tnum',
-            complete ? 'bg-moss/12 text-moss' : 'bg-clay/12 text-clay',
+            complete ? 'bg-moss/12 text-moss' : 'bg-tide/12 text-tide',
           )}
         >
           {percent(progress)}
@@ -772,7 +740,7 @@ function GateCard({ gate }: { gate: LiquidityGate }) {
       </div>
       <div className="mt-3 h-1.5 w-full rounded-full bg-ink/[0.06]">
         <div
-          className={cn('h-full rounded-full', complete ? 'bg-moss' : 'bg-clay')}
+          className={cn('h-full rounded-full', complete ? 'bg-moss' : 'bg-tide')}
           style={{ width: `${progress * 100}%` }}
         />
       </div>

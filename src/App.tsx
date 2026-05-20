@@ -12,14 +12,6 @@ export default function App() {
   const [dashboardRange, setDashboardRange] = useState<DashboardRange>('ytd');
   const checklistQuery = useDocumentChecklist();
   const dashboardQuery = useDashboard(dashboardRange);
-  const checklistItems = checklistQuery.data?.items ?? [];
-  const coreSources = checklistItems.filter((item) => item.priority.includes('Essential')).length;
-  const coreReady = checklistItems.filter(
-    (item) => item.obtained && item.priority.includes('Essential'),
-  ).length;
-  const openLater = checklistItems.filter(
-    (item) => !item.obtained && !item.priority.includes('Essential'),
-  ).length;
 
   useEffect(() => {
     void bootstrapLocalDatabase();
@@ -29,9 +21,6 @@ export default function App() {
     <AppShell
       view={view}
       onViewChange={setView}
-      coreSources={coreSources}
-      coreReady={coreReady}
-      openLater={openLater}
       liquidityGateCurrent={dashboardQuery.data?.gates[0]?.currentAmount ?? 0}
       liquidityGate={dashboardQuery.data?.gates[0]?.targetAmount ?? 80000}
     >
