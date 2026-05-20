@@ -12,30 +12,22 @@ import {
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { useTransactionCounts } from '../../hooks/use-transaction-counts';
-import { isTauriRuntime } from '../../lib/tauri';
+import { revealInFileManager } from '../../lib/tauri';
 import { cn } from '../../lib/utils';
 import type {
   ChecklistCategorySummary,
   ChecklistDataset,
+  ChecklistFilter,
   ChecklistItem,
   WatchRootStatus,
 } from './types';
+import { DEFAULT_CHECKLIST_FILTER } from './types';
 
 interface DocumentIntakeViewProps {
   query: UseQueryResult<ChecklistDataset, Error>;
+  filter: ChecklistFilter;
+  onFilterChange: Dispatch<SetStateAction<ChecklistFilter>>;
 }
-
-interface ChecklistFilter {
-  status: 'all' | 'open';
-  priority: 'all' | 'essential';
-  category: string | 'all';
-}
-
-const DEFAULT_CHECKLIST_FILTER: ChecklistFilter = {
-  status: 'all',
-  priority: 'all',
-  category: 'all',
-};
 
 function isEssentialItem(item: ChecklistItem): boolean {
   return item.priority.includes('Essential');
@@ -74,10 +66,9 @@ function formatRelativeTime(ms: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
-export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
+export function DocumentIntakeView({ query, filter, onFilterChange }: DocumentIntakeViewProps) {
   const transactionCountsQuery = useTransactionCounts();
   const tableRef = useRef<HTMLDivElement | null>(null);
-  const [filter, setFilter] = useState<ChecklistFilter>(DEFAULT_CHECKLIST_FILTER);
 
   if (query.isLoading) {
     return <LoadingState />;
@@ -100,7 +91,7 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
   const essentialsGap = Math.max(0, coreSources - coreReady);
 
   const handleStartWithEssentials = () => {
-    setFilter({ status: 'open', priority: 'essential', category: 'all' });
+    onFilterChange({ status: 'open', priority: 'essential', category: 'all' });
     tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -133,7 +124,7 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
         <CategorySidebar
           categories={summary.categories}
           activeCategory={filter.category}
-          onCategoryChange={(id) => setFilter((f) => ({ ...f, category: id }))}
+          onCategoryChange={(id) => onFilterChange((f) => ({ ...f, category: id }))}
         />
         <div ref={tableRef}>
           <ChecklistTable
@@ -141,7 +132,7 @@ export function DocumentIntakeView({ query }: DocumentIntakeViewProps) {
             categories={summary.categories}
             transactionCounts={transactionCounts}
             filter={filter}
-            onFilterChange={setFilter}
+            onFilterChange={onFilterChange}
           />
         </div>
       </div>
@@ -230,12 +221,6 @@ function EssentialsBanner({ count, onStart }: EssentialsBannerProps) {
       </button>
     </div>
   );
-}
-
-async function revealInFileManager(path: string): Promise<void> {
-  if (!isTauriRuntime()) return;
-  const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('reveal_in_file_manager', { path });
 }
 
 function WatchRootStrip({ status }: { status: WatchRootStatus }) {
