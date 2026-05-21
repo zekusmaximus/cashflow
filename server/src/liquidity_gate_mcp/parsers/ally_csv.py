@@ -33,6 +33,20 @@ ALLY_HYSA_ACCOUNT = AccountReference(
 # A match overrides the default sign-based direction so the row is recorded
 # as ``transfer`` and pairs with the partner row on the other account.
 #
+# - requested\s+transfer\s+from : Ally-side inbound from a household checking
+#   account ("Requested transfer from JEFFREY A ZYJESKI"). Made an explicit
+#   pattern to close a latent gap: inbound rows were previously tagged
+#   ``transfer`` only because their description also carried the trailing
+#   "Ally Bank Transfer" text (caught by the pattern below). An inbound row
+#   exported without that suffix would fall through to the sign-based branch
+#   and silently become ``inflow`` — the same "Requested transfer from ..."
+#   description landing as two different directions. Matching the "from"
+#   phrase directly makes every inbound row enter the pairing pass as
+#   ``transfer`` regardless of suffix. NOTE: this does not by itself make the
+#   stored direction uniform — transfers.pair_transfers deliberately
+#   reclassifies an *unpaired* inbound row back to ``inflow`` when no
+#   household counterpart exists. That paired-vs-unpaired split is the
+#   mechanism that actually mixes direction on these rows today.
 # - requested\s+transfer.*ally\s+bank\s+transfer : the partner side of
 #   Beacon's ``ALLY BANK $TRANSFER`` outflows. Generic enough to match both
 #   "JEFFREY A ZYJESKI" and "ASHLEY ..." variants.
@@ -43,6 +57,7 @@ ALLY_HYSA_ACCOUNT = AccountReference(
 # Ally that the master index §8 wants tracked as event income. Outbound
 # Zelle to third parties is real spending and stays as outflow.
 TRANSFER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"requested\s+transfer\s+from\b", re.IGNORECASE),
     re.compile(r"requested\s+transfer.*ally\s+bank\s+transfer", re.IGNORECASE),
     re.compile(r"requested\s+transfer\s+to\b", re.IGNORECASE),
 )
