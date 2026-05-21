@@ -26,7 +26,11 @@
       "Bash(python -c \"import sys, liquidity_gate_mcp; print\\(sys.executable\\); print\\(liquidity_gate_mcp.__file__\\)\")",
       "Bash(server/.venv/Scripts/python.exe -c \"from liquidity_gate_mcp import server; print\\([t for t in dir\\(server\\) if not t.startswith\\('_'\\)]\\)\")",
       "Bash(server/.venv/Scripts/python.exe -c \"import liquidity_gate_mcp, os; print\\(os.path.dirname\\(liquidity_gate_mcp.__file__\\)\\)\")",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(PYTHONPATH=src .venv/Scripts/python.exe _dry_run_may2026.py)",
+      "Bash(.venv/Scripts/python.exe -m py_compile src/liquidity_gate_mcp/server.py src/liquidity_gate_mcp/monthly_summary.py src/liquidity_gate_mcp/monthly_summary_flags.py src/liquidity_gate_mcp/monthly_summary_renderer.py src/liquidity_gate_mcp/balances.py src/liquidity_gate_mcp/tools.py src/liquidity_gate_mcp/watcher.py)",
+      "Bash(PYTHONPATH=src .venv/Scripts/python.exe _regen.py)",
+      "Bash(git commit *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Jeff\\Documents\\Cashflow"
