@@ -164,6 +164,11 @@ def iter_candidate_files(scan_root: Path) -> list[Path]:
             continue
         if any(part in IGNORED_DIRECTORIES for part in path.parts):
             continue
+        # Generated artifacts (e.g. the monthly cashflow summaries) are .md
+        # files. They must not be scored against tracker rows or fed to the
+        # CSV parsers — that would quietly mark tracker documents "obtained".
+        if path.suffix.lower() == ".md":
+            continue
         files.append(path)
     return files
 

@@ -20,6 +20,9 @@ IGNORED_PARTS = {
     "src-tauri",
     "server",
     ".claudecowork",
+    # Generated monthly cashflow summaries land here; they are an output of
+    # the watch root, not an ingest input — don't echo their writes as events.
+    "monthly_summaries",
 }
 
 
