@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-19 (roadmap §6 dashboard build-out closed: variance explanation editor, reconciliation history drill-down, subscriptions audit, HYSA trajectory chart, Capital-Plan Feasibility v1 badge)
+**Last updated:** 2026-05-21 (monthly cashflow bridge generator landed: `compute_monthly_summary` + `generate_monthly_summary` MCP tools, 13 tools total)
 
 ## Snapshot
 
@@ -112,6 +112,24 @@ badge currently runs on a v1 heuristic combining cash-flow, HYSA gate,
 and leakage signals; landing items 2-4 would let it drive against
 master-index §10's specific 401(k)/HSA/Roth/rental tests instead of
 coarse heuristics.
+
+**Monthly cashflow bridge generator (2026-05-21):** the monthly bridge
+document generator is live. Two new MCP tools — `compute_monthly_summary`
+(pure, returns the structured dict) and `generate_monthly_summary` (renders +
+writes the markdown, returns the same dict plus `markdown_path`) — produce a
+four-section bridge document (HYSA status + $80K projection, transactions-view
+and theoretical net free cash flow / savings rate, merchant-level spend
+narrative, auto-populated review flags) from one shared compute pass, so the
+JSON and markdown can never diverge. The `.md` lands in
+`<watch_root>/monthly_summaries/` and feeds the separate wealth-tracker
+project; a manual-notes block survives regeneration. It is meant to be invoked
+by a Cowork scheduled task on the 1st of each month, targeting the prior month.
+Config dependency: a new `[wealth_bridge]` section in `balances.toml` supplies
+gross household income, 401(k)/HSA contributions, the $80K HYSA target, and the
+flag thresholds. `jeff_401k_monthly` and `ashley_401k_monthly` ship as `0`
+placeholders — the server logs a warning at startup until they are populated
+from the latest Novartis paystub; generation is not blocked, but the
+theoretical savings-rate view is untrustworthy until then.
 
 ## Architecture (one-screen reminder)
 

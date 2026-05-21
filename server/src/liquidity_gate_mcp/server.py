@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import atexit
+import logging
+import sys
 
 from mcp.server.fastmcp import FastMCP
 
@@ -10,6 +12,11 @@ from .computed_balance import seed_balance_anchors
 from .config import load_settings
 from .database import DatabaseManager
 from .ingest import ingest_watch_root as ingest_watch_root_impl
+from .monthly_summary import (
+    compute_monthly_summary as compute_monthly_summary_impl,
+    generate_monthly_summary as generate_monthly_summary_impl,
+    placeholder_401k_warning,
+)
 from .models import (
     ApplyClassifierRequest,
     PairTransfersRequest,
@@ -32,15 +39,26 @@ from .tools import (
 from .transfers import pair_transfers as pair_transfers_impl
 from .watcher import CashFlowWatcher
 
+logger = logging.getLogger("liquidity_gate_mcp")
+
 settings = load_settings()
 database = DatabaseManager(settings.database_path, settings.schema_path)
 database.initialize()
 # Materialise balances.toml opening/closing balances as reconciliation_periods
 # anchor rows so v_computed_balance is queryable immediately. Idempotent.
-seed_balance_anchors(database, load_balances(settings.watch_root))
+balances_config = load_balances(settings.watch_root)
+seed_balance_anchors(database, balances_config)
 watcher = CashFlowWatcher(settings.watch_root)
 watcher.start()
 atexit.register(watcher.stop)
+
+# Surface — but do not block on — missing 401(k) config. The monthly summary's
+# theoretical savings-rate view is untrustworthy until these are populated from
+# the latest Novartis paystub.
+_placeholder_warning = placeholder_401k_warning(balances_config.wealth_bridge)
+if _placeholder_warning:
+    logger.warning(_placeholder_warning)
+    print(_placeholder_warning, file=sys.stderr)
 
 mcp = FastMCP("Liquidity Gate MCP", json_response=True)
 
@@ -226,6 +244,48 @@ def refresh_hysa_gate() -> dict:
     """
     seed_balance_anchors(database, load_balances(settings.watch_root))
     return refresh_hysa_gate_impl(database).as_dict()
+
+
+@mcp.tool()
+def compute_monthly_summary(year: int, month: int) -> dict:
+    """Compute the monthly cashflow bridge summary — pure, no file I/O.
+
+    Returns the structured summary dict for ``year``/``month``: HYSA status and
+    $80K-target projection, transactions-view and theoretical net free cash
+    flow + savings rate, the merchant-level spend narrative, and the
+    auto-generated review flags. This is the programmatic surface for other
+    Claude projects (e.g. the wealth tracker); ``generate_monthly_summary``
+    writes the same data to a markdown file.
+
+    The theoretical savings-rate view is config-sourced from ``[wealth_bridge]``
+    in ``balances.toml`` — accurate only once the 401(k) placeholders are
+    populated from a Novartis paystub.
+    """
+    balances = load_balances(settings.watch_root)
+    return compute_monthly_summary_impl(database, balances.wealth_bridge, year, month)
+
+
+@mcp.tool()
+def generate_monthly_summary(year: int, month: int) -> dict:
+    """Generate the monthly cashflow bridge document — computes and writes .md.
+
+    Calls ``compute_monthly_summary``, renders the markdown, and writes it to
+    ``<watch_root>/monthly_summaries/YYYY-MM_Monthly_Cashflow_Summary.md``
+    (directory created if absent). Returns the same dict as
+    ``compute_monthly_summary`` plus ``markdown_path``. Any manual-notes block
+    in a pre-existing file is preserved across regeneration.
+
+    Scheduling: this tool is invoked by a Cowork scheduled task on the 1st of
+    each month — shifted to the second business day when the 1st falls on a
+    weekend or US federal holiday — always targeting the **prior** calendar
+    month. No scheduler runs inside this server; the scheduler passes the
+    correct ``(year, month)``. The scheduled-task config lives outside this
+    repo.
+    """
+    balances = load_balances(settings.watch_root)
+    return generate_monthly_summary_impl(
+        database, balances.wealth_bridge, year, month, settings.watch_root
+    )
 
 
 def main() -> None:
