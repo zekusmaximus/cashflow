@@ -5,6 +5,8 @@ import atexit
 from mcp.server.fastmcp import FastMCP
 
 from .balances import load_balances
+from .computed_balance import refresh_hysa_gate as refresh_hysa_gate_impl
+from .computed_balance import seed_balance_anchors
 from .config import load_settings
 from .database import DatabaseManager
 from .ingest import ingest_watch_root as ingest_watch_root_impl
@@ -33,6 +35,9 @@ from .watcher import CashFlowWatcher
 settings = load_settings()
 database = DatabaseManager(settings.database_path, settings.schema_path)
 database.initialize()
+# Materialise balances.toml opening/closing balances as reconciliation_periods
+# anchor rows so v_computed_balance is queryable immediately. Idempotent.
+seed_balance_anchors(database, load_balances(settings.watch_root))
 watcher = CashFlowWatcher(settings.watch_root)
 watcher.start()
 atexit.register(watcher.stop)
@@ -203,6 +208,24 @@ def upsert_classification_rule(request: dict) -> dict:
 def list_classification_rules() -> dict:
     """Return all classification rules ordered by priority then created_at."""
     return list_classification_rules_impl(database).model_dump()
+
+
+@mcp.tool()
+def refresh_hysa_gate() -> dict:
+    """Recompute the Ally HYSA liquidity gate from the anchor-based balance.
+
+    Re-seeds the balances.toml anchors into ``reconciliation_periods``, reads
+    ``v_computed_balance`` for the Ally HYSA account, and writes the result
+    onto ``liquidity_gates.current_amount`` for ``gate_key = 'ally_hysa'``.
+
+    Run this on demand — typically after adding a statement closing under
+    ``[statement_closings.ally]`` in balances.toml. Takes no arguments.
+
+    Returns ``anchor_date``, ``anchor_balance``, ``net_since_anchor``,
+    ``computed_balance``, and ``updated`` (False when no anchor exists).
+    """
+    seed_balance_anchors(database, load_balances(settings.watch_root))
+    return refresh_hysa_gate_impl(database).as_dict()
 
 
 def main() -> None:

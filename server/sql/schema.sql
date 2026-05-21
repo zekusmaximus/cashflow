@@ -145,6 +145,21 @@ CREATE TABLE IF NOT EXISTS liquidity_gates (
   notes TEXT NOT NULL DEFAULT ''
 );
 
+-- Seed the Ally HYSA liquidity gate. current_amount is a placeholder: run
+-- `refresh-hysa-gate` to populate it from v_computed_balance. target_amount
+-- is the $80,000 HYSA savings goal.
+INSERT OR IGNORE INTO liquidity_gates
+  (id, gate_key, label, current_amount, target_amount, target_date, notes)
+VALUES (
+  'gate-ally-hysa',
+  'ally_hysa',
+  'Ally HYSA Balance',
+  0,
+  80000,
+  '2026-12-31',
+  'Anchor-computed. Run refresh-hysa-gate to update current_amount from transactions.'
+);
+
 CREATE TABLE IF NOT EXISTS reconciliation_periods (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
@@ -226,3 +241,62 @@ SELECT
 FROM transactions
 GROUP BY substr(occurred_on, 1, 7)
 ORDER BY month;
+
+-- Estimated current balance per account, anchored on the most recent known
+-- statement closing. The anchor is the latest reconciliation_periods row with
+-- a non-NULL statement_closing_balance; the 12/31/2025 opening balances are
+-- seeded as Dec-2025 rows (see computed_balance.seed_balance_anchors), so they
+-- serve as the fallback anchor until a real monthly statement is recorded.
+-- net_since_anchor sums every transaction strictly after the anchor date
+-- through today: inflows (+), outflows (-), and transfers by their stored
+-- signed amount. All three directions count — each row is real money moving
+-- on that account, so a transfer in or out shifts the balance exactly like
+-- any other posting. (Excluding transfers belongs in spending analysis, where
+-- inter-account moves would otherwise double-count as spending — not in a
+-- balance view.) Accounts with no anchor at all (e.g. Citi, untracked at
+-- 2025-12-31) return NULL for the computed columns.
+CREATE VIEW IF NOT EXISTS v_computed_balance AS
+SELECT
+  a.id AS account_id,
+  anchor.anchor_date AS anchor_date,
+  anchor.anchor_balance AS anchor_balance,
+  CASE WHEN anchor.anchor_date IS NULL THEN NULL ELSE ROUND(COALESCE((
+    SELECT SUM(CASE
+                 WHEN t.direction = 'inflow'   THEN ABS(t.amount)
+                 WHEN t.direction = 'outflow'  THEN -ABS(t.amount)
+                 WHEN t.direction = 'transfer' THEN t.amount
+                 ELSE 0
+               END)
+      FROM transactions t
+     WHERE t.account_id = a.id
+       AND t.occurred_on > anchor.anchor_date
+       AND t.occurred_on <= DATE('now', 'localtime')
+  ), 0), 2) END AS net_since_anchor,
+  CASE WHEN anchor.anchor_date IS NULL THEN NULL ELSE ROUND(anchor.anchor_balance + COALESCE((
+    SELECT SUM(CASE
+                 WHEN t.direction = 'inflow'   THEN ABS(t.amount)
+                 WHEN t.direction = 'outflow'  THEN -ABS(t.amount)
+                 WHEN t.direction = 'transfer' THEN t.amount
+                 ELSE 0
+               END)
+      FROM transactions t
+     WHERE t.account_id = a.id
+       AND t.occurred_on > anchor.anchor_date
+       AND t.occurred_on <= DATE('now', 'localtime')
+  ), 0), 2) END AS computed_balance,
+  DATE('now', 'localtime') AS as_of_date
+FROM accounts a
+LEFT JOIN (
+  SELECT rp.account_id,
+         rp.period_end AS anchor_date,
+         rp.statement_closing_balance AS anchor_balance
+    FROM reconciliation_periods rp
+   WHERE rp.statement_closing_balance IS NOT NULL
+     AND NOT EXISTS (
+           SELECT 1
+             FROM reconciliation_periods rp2
+            WHERE rp2.account_id = rp.account_id
+              AND rp2.statement_closing_balance IS NOT NULL
+              AND rp2.period_end > rp.period_end
+         )
+) anchor ON anchor.account_id = a.id;

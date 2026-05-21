@@ -35,6 +35,14 @@ TRANSFER_IN_ASHLEY = (
     "5/3/2026,9:12:01,500,Deposit,"
     "Requested transfer from ASHLEY M CALABRESE Ally Bank Transfer\n"
 )
+# Inbound "Requested transfer from" WITHOUT the trailing "Ally Bank Transfer"
+# text. Before the explicit "from" pattern, this fell through to the
+# sign-based branch and was tagged 'inflow' — inconsistent with the rows
+# above that happen to carry the "Ally Bank Transfer" suffix.
+TRANSFER_IN_NO_SUFFIX = (
+    "5/6/2026,7:05:00,750,Deposit,"
+    "Requested transfer from JEFFREY A ZYJESKI\n"
+)
 # Hypothetical outbound transfer to checking — Ally side of a Beacon deposit.
 TRANSFER_OUT = (
     "5/2/2026,8:00:00,-1500,Withdrawal,"
@@ -104,6 +112,23 @@ def test_known_transfer_patterns_override_sign(tmp_path: Path) -> None:
     # Original signs preserved even when reclassified as transfers.
     assert result.transactions[0].amount == Decimal("1000")
     assert result.transactions[2].amount == Decimal("-1500")
+
+
+def test_inbound_transfer_from_is_uniform_without_suffix(tmp_path: Path) -> None:
+    # Every "Requested transfer from ..." inbound row must be tagged
+    # 'transfer' regardless of whether the description carries the trailing
+    # "Ally Bank Transfer" text. The row below lacks that suffix; before the
+    # explicit "from" pattern it leaked through as 'inflow'.
+    csv_path = _write_ally_csv(
+        tmp_path,
+        "ally.csv",
+        TRANSFER_IN_JEFF + TRANSFER_IN_NO_SUFFIX,
+    )
+
+    result = parse_ally_csv(csv_path)
+
+    assert result.errors == []
+    assert [tx.direction for tx in result.transactions] == ["transfer", "transfer"]
 
 
 def test_interest_is_inflow_not_transfer(tmp_path: Path) -> None:
