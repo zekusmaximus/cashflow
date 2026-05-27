@@ -6,6 +6,7 @@ import sys
 
 from mcp.server.fastmcp import FastMCP
 
+from .annual_reference import load_annual_reference
 from .balances import load_balances
 from .computed_balance import refresh_hysa_gate as refresh_hysa_gate_impl
 from .computed_balance import seed_balance_anchors
@@ -19,6 +20,9 @@ from .monthly_summary import (
 )
 from .models import (
     ApplyClassifierRequest,
+    IngestCheckDepositLedgerRequest,
+    IngestCheckRegisterRequest,
+    LifecycleAuditRequest,
     PairTransfersRequest,
     ReconcilePeriodsRequest,
     ReconcileTransactionsRequest,
@@ -29,7 +33,11 @@ from .models import (
 from .reconciliation import reconcile_periods as reconcile_periods_impl
 from .tools import (
     apply_classifier as apply_classifier_impl,
+    get_annual_reference as get_annual_reference_impl,
+    ingest_check_deposit_ledger as ingest_check_deposit_ledger_impl,
+    ingest_check_register as ingest_check_register_impl,
     list_classification_rules as list_classification_rules_impl,
+    list_lifecycle_audit_candidates as list_lifecycle_audit_candidates_impl,
     query_cashflow_data as query_cashflow_data_impl,
     read_document_metadata as read_document_metadata_impl,
     reconcile_transactions as reconcile_transactions_impl,
@@ -247,6 +255,71 @@ def refresh_hysa_gate() -> dict:
 
 
 @mcp.tool()
+def ingest_check_register(request: dict | None = None) -> dict:
+    """Attach payee + category info to outbound paper checks from a CSV register.
+
+    Reads ``<watch_root>/check_register.csv`` (or the path supplied in
+    ``register_path``) and writes a ``transaction_overrides`` row for every
+    register entry that resolves to a known transaction. Required CSV
+    columns: ``account, check_number, date_written, amount, payee``.
+    Optional: ``primary_category, subcategory, lifecycle, household_role,
+    notes``. Lines starting with ``#`` are skipped.
+
+    Match priority: strict regex on ``description_raw`` (``CHECK# <n>``) at
+    the same account + amount; fallback by date window when no strict match
+    exists. Ambiguous fallbacks are reported in ``unmatched`` for manual
+    triage. Pass ``dry_run=True`` to preview without writing.
+    """
+    parsed_request = IngestCheckRegisterRequest.model_validate(request or {})
+    return ingest_check_register_impl(database, settings, parsed_request).model_dump()
+
+
+@mcp.tool()
+def ingest_check_deposit_ledger(request: dict | None = None) -> dict:
+    """Attach source + category info to incoming mobile check deposits.
+
+    Reads ``<watch_root>/check_deposits.csv`` (or the path supplied in
+    ``ledger_path``). Required columns: ``account, date_deposited, amount,
+    source``. Optional: ``primary_category`` (defaults to ``income``),
+    ``subcategory, lifecycle, household_role, notes``. Match key is
+    ``(account_id, amount, occurred_on ± 3 days)`` against rows whose
+    ``description_raw`` matches ``MOBILE CHECK DEP``. ``dry_run`` previews.
+    """
+    parsed_request = IngestCheckDepositLedgerRequest.model_validate(request or {})
+    return ingest_check_deposit_ledger_impl(database, settings, parsed_request).model_dump()
+
+
+@mcp.tool()
+def list_lifecycle_audit_candidates(request: dict | None = None) -> dict:
+    """Surface transactions whose lifecycle / category looks suspicious.
+
+    Returns a ranked list of review candidates across four heuristics
+    (one_time-but-actually-recurring, recurring-but-singleton,
+    discretionary outliers, high-value pet_care). Does NOT auto-reclassify
+    — the analyst inspects and applies ``upsert_transaction_override``
+    manually. Optional filters: ``primary_category``, ``min_amount``
+    (default 100.0), ``limit`` (default 100).
+    """
+    parsed_request = LifecycleAuditRequest.model_validate(request or {})
+    return list_lifecycle_audit_candidates_impl(database, parsed_request).model_dump()
+
+
+@mcp.tool()
+def get_annual_reference(year: int | None = None) -> dict:
+    """Return year-end W-2 / 401(k) / HSA / withholding totals from the
+    annual reference TOML file.
+
+    Reads ``<watch_root>/annual_household_reference.toml``. Passing
+    ``year`` returns just that year (synthesized as zero-valued
+    ``populated=false`` entry when not present in the file). Passing
+    nothing returns every year in the file. The file does not exist by
+    default; the result reports ``file_exists`` so callers can guide the
+    user to copy the template.
+    """
+    return get_annual_reference_impl(settings, year).model_dump()
+
+
+@mcp.tool()
 def compute_monthly_summary(year: int, month: int) -> dict:
     """Compute the monthly cashflow bridge summary — pure, no file I/O.
 
@@ -262,7 +335,11 @@ def compute_monthly_summary(year: int, month: int) -> dict:
     populated from a Novartis paystub.
     """
     balances = load_balances(settings.watch_root)
-    return compute_monthly_summary_impl(database, balances.wealth_bridge, year, month)
+    annual = load_annual_reference(settings.watch_root)
+    matching = next((e for e in annual.entries if e.year == year), None)
+    return compute_monthly_summary_impl(
+        database, balances.wealth_bridge, year, month, annual_reference=matching
+    )
 
 
 @mcp.tool()
@@ -283,8 +360,15 @@ def generate_monthly_summary(year: int, month: int) -> dict:
     repo.
     """
     balances = load_balances(settings.watch_root)
+    annual = load_annual_reference(settings.watch_root)
+    matching = next((e for e in annual.entries if e.year == year), None)
     return generate_monthly_summary_impl(
-        database, balances.wealth_bridge, year, month, settings.watch_root
+        database,
+        balances.wealth_bridge,
+        year,
+        month,
+        settings.watch_root,
+        annual_reference=matching,
     )
 
 

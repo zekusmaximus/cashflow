@@ -415,3 +415,167 @@ class ListClassificationRulesResult(BaseModel):
 
     rules: list[ClassificationRule]
     total: int
+
+
+# ---------------------------------------------------------------------------
+# Check register / mobile-deposit ledger ingestion
+# ---------------------------------------------------------------------------
+
+
+class CheckRegisterUnmatched(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_number: int
+    check_number: str | None = None
+    account: str
+    amount: float
+    date_written: str
+    reason: str
+    detail: str = ""
+
+
+class CheckRegisterDuplicate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check_number: str
+    account: str
+    row_numbers: list[int]
+
+
+class CheckRegisterRowError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_number: int
+    reason: str
+    detail: str = ""
+
+
+class IngestCheckRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    register_path: str | None = None
+    dry_run: bool = False
+
+
+class IngestCheckRegisterResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    register_path: str
+    register_exists: bool
+    rows_read: int = 0
+    matched: int = 0
+    overrides_written: int = 0
+    overrides_superseded_prior: int = 0
+    unmatched: list[CheckRegisterUnmatched] = Field(default_factory=list)
+    duplicates_in_register: list[CheckRegisterDuplicate] = Field(default_factory=list)
+    errors: list[CheckRegisterRowError] = Field(default_factory=list)
+    dry_run: bool = False
+
+
+class IngestCheckDepositLedgerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ledger_path: str | None = None
+    dry_run: bool = False
+
+
+class CheckDepositUnmatched(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_number: int
+    account: str
+    amount: float
+    date_deposited: str
+    source: str
+    reason: str
+    detail: str = ""
+
+
+class CheckDepositDuplicate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account: str
+    amount: float
+    date_deposited: str
+    row_numbers: list[int]
+
+
+class IngestCheckDepositLedgerResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ledger_path: str
+    ledger_exists: bool
+    rows_read: int = 0
+    matched: int = 0
+    overrides_written: int = 0
+    overrides_superseded_prior: int = 0
+    unmatched: list[CheckDepositUnmatched] = Field(default_factory=list)
+    duplicates_in_ledger: list[CheckDepositDuplicate] = Field(default_factory=list)
+    errors: list[CheckRegisterRowError] = Field(default_factory=list)
+    dry_run: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle audit
+# ---------------------------------------------------------------------------
+
+
+class LifecycleAuditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary_category: str | None = None
+    min_amount: float = 100.0
+    limit: int = 100
+
+
+class LifecycleAuditCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    occurred_on: str
+    merchant_normalized: str | None = None
+    description_raw: str
+    amount: float
+    primary_category: str
+    subcategory: str | None = None
+    lifecycle: str
+    suggested_review_reason: str
+
+
+class LifecycleAuditResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidates: list[LifecycleAuditCandidate] = Field(default_factory=list)
+    total: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Annual household reference (W-2 / 401k / HSA totals)
+# ---------------------------------------------------------------------------
+
+
+class AnnualReferenceEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    year: int
+    gross_w2_jeff: float = 0.0
+    gross_w2_ashley: float = 0.0
+    federal_withholding: float = 0.0
+    state_withholding: float = 0.0
+    fica_employee: float = 0.0
+    contribution_401k_jeff: float = 0.0
+    contribution_401k_ashley: float = 0.0
+    employer_match_401k_jeff: float = 0.0
+    employer_match_401k_ashley: float = 0.0
+    hsa_contribution: float = 0.0
+    hsa_employer_contribution: float = 0.0
+    notes: str = ""
+    populated: bool = False
+
+
+class GetAnnualReferenceResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str
+    file_exists: bool
+    entries: list[AnnualReferenceEntry] = Field(default_factory=list)

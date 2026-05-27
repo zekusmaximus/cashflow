@@ -1,0 +1,28 @@
+# check_deposits.csv — incoming mobile-check deposit ledger
+#
+# Copy this file to <watch_root>/check_deposits.csv and fill it in, then
+# run the MCP tool `ingest_check_deposit_ledger`.
+#
+# Required columns: account, date_deposited, amount, source
+# Optional columns: primary_category, subcategory, lifecycle, household_role, notes
+#
+# Matching is (account_id, amount, occurred_on ± 3 days) against rows whose
+# description_raw matches "MOBILE CHECK DEP". The 3-day window covers
+# deposit-to-clearing lag.
+#
+# Defaults when columns are blank:
+# - primary_category: "income"
+# - subcategory: left null (the analyst usually picks: rental_income,
+#   business_income, tax_refund, gift_received, reimbursement, etc.)
+# - lifecycle: left null (use "recurring" for rent, "one_time" otherwise)
+#
+# If the deposit is actually an inter-account transfer disguised as a check
+# (e.g. a check from your own credit union account), set primary_category =
+# "transfer" — this skips the income classification entirely.
+#
+# Lines starting with `#` are skipped.
+#
+account,date_deposited,amount,source,primary_category,subcategory,lifecycle,household_role,notes
+# Beacon Checking,2026-02-03,5235.87,Hartwell LLC tenant,rental,rental_income,recurring,rental,February rent
+# Beacon Checking,2026-03-04,5235.87,Hartwell LLC tenant,rental,rental_income,recurring,rental,March rent
+# Beacon Checking,2026-03-31,5235.87,Hartwell LLC tenant,rental,rental_income,recurring,rental,April rent (early)
