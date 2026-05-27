@@ -1,0 +1,25 @@
+# check_register.csv — outbound paper check register
+#
+# Copy this file to <watch_root>/check_register.csv and fill it in, then
+# run the MCP tool `ingest_check_register` (or pass `dry_run: true` first
+# to preview matches).
+#
+# Required columns: account, check_number, date_written, amount, payee
+# Optional columns: primary_category, subcategory, lifecycle, household_role, notes
+#
+# - account: matches accounts.account_name (case-insensitive) or accounts.id
+# - check_number: digits trailing CHECK# in description_raw; leading zeros OK
+# - date_written: ISO YYYY-MM-DD; matching is by amount + check_number,
+#   date is only a fallback when the strict description match fails
+# - amount: positive decimal (face value of the check)
+# - payee: free text; becomes merchant_normalized on the matched transaction
+# - primary_category / subcategory / lifecycle / household_role: override the
+#   classifier output for this transaction when provided
+# - notes: appended to the override note text
+#
+# Lines starting with `#` are skipped. The two example rows below are
+# commented out — uncomment and edit them, or paste your own beneath them.
+#
+account,check_number,date_written,amount,payee,primary_category,subcategory,lifecycle,household_role,notes
+# Beacon Checking,209,2026-01-12,425.00,ACME Landscaping,fixed_obligation,landscaping,recurring,joint,Monthly mowing contract
+# Beacon Checking,210,2026-02-04,1850.00,Smith Roofing LLC,abnormal,home_improvement,one_time,joint,Garage roof patch

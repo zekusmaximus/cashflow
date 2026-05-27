@@ -1,0 +1,31 @@
+# annual_household_reference.toml — year-end W-2 / 401(k) / HSA / withholding totals.
+#
+# Copy this file to <watch_root>/annual_household_reference.toml and fill in
+# one [[year]] block per calendar year. Read via the MCP tool
+# `get_annual_reference(year)` (omit `year` to get every block).
+#
+# These values come from W-2 box totals, end-of-year paystubs, and 401(k)
+# year-end statements — documents that are not part of the transaction
+# stream. Leave a field as 0 (or omit it entirely) when you don't have the
+# number; downstream consumers treat zero as "unset" and skip derived metrics
+# rather than reporting misleading ratios.
+#
+# The `compute_monthly_summary` / `generate_monthly_summary` tools read this
+# file for the requested year and, when at least one nonzero value is set,
+# add an `annual_reference` section to their output with effective tax rate,
+# gross-to-net ratio, and pre-tax savings rate.
+
+[[year]]
+year = 2026
+gross_w2_jeff = 0.00
+gross_w2_ashley = 0.00
+federal_withholding = 0.00
+state_withholding = 0.00
+fica_employee = 0.00
+contribution_401k_jeff = 0.00
+contribution_401k_ashley = 0.00
+employer_match_401k_jeff = 0.00
+employer_match_401k_ashley = 0.00
+hsa_contribution = 0.00
+hsa_employer_contribution = 0.00
+notes = ""

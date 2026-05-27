@@ -6,12 +6,20 @@ from difflib import SequenceMatcher
 from pathlib import Path
 import re
 
+from .annual_reference import get_annual_reference as get_annual_reference_impl
+from .check_registers import (
+    ingest_check_deposit_ledger as ingest_check_deposit_ledger_impl,
+    ingest_check_register as ingest_check_register_impl,
+)
 from .config import ServerSettings
 from .database import DatabaseManager
 from .classifier import (
     apply_classifier as apply_classifier_impl,
     list_classification_rules as list_classification_rules_impl,
     upsert_classification_rule as upsert_classification_rule_impl,
+)
+from .lifecycle_audit import (
+    list_lifecycle_audit_candidates as list_lifecycle_audit_candidates_impl,
 )
 from .models import (
     ApplyClassifierRequest,
@@ -20,6 +28,13 @@ from .models import (
     DocumentMetadataSummary,
     DocumentTrackerRow,
     FileMatch,
+    GetAnnualReferenceResult,
+    IngestCheckDepositLedgerRequest,
+    IngestCheckDepositLedgerResult,
+    IngestCheckRegisterRequest,
+    IngestCheckRegisterResult,
+    LifecycleAuditRequest,
+    LifecycleAuditResult,
     ListClassificationRulesResult,
     ReadDocumentMetadataResult,
     ReconcileTransactionsRequest,
@@ -282,6 +297,42 @@ def upsert_classification_rule(
 
 def list_classification_rules(database: DatabaseManager) -> ListClassificationRulesResult:
     return list_classification_rules_impl(database)
+
+
+# ---------------------------------------------------------------------------
+# Data-quality tools (check register, deposit ledger, lifecycle audit,
+# annual reference). Thin wrappers — implementations live in their own
+# modules so they can be unit-tested without touching the MCP layer.
+# ---------------------------------------------------------------------------
+
+
+def ingest_check_register(
+    database: DatabaseManager,
+    settings: ServerSettings,
+    request: IngestCheckRegisterRequest,
+) -> IngestCheckRegisterResult:
+    return ingest_check_register_impl(database, settings.watch_root, request)
+
+
+def ingest_check_deposit_ledger(
+    database: DatabaseManager,
+    settings: ServerSettings,
+    request: IngestCheckDepositLedgerRequest,
+) -> IngestCheckDepositLedgerResult:
+    return ingest_check_deposit_ledger_impl(database, settings.watch_root, request)
+
+
+def list_lifecycle_audit_candidates(
+    database: DatabaseManager,
+    request: LifecycleAuditRequest,
+) -> LifecycleAuditResult:
+    return list_lifecycle_audit_candidates_impl(database, request)
+
+
+def get_annual_reference(
+    settings: ServerSettings, year: int | None = None
+) -> GetAnnualReferenceResult:
+    return get_annual_reference_impl(settings.watch_root, year)
 
 
 def tokenize(value: str) -> set[str]:
