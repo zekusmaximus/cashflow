@@ -14,10 +14,12 @@ Advanced planning inputs such as payroll, tax, insurance, debt, and capital-plan
 
 ## Repository layout
 
-- [docs/](docs/) — canonical operating references: the master index, the tracker CSV that drives the intake view, and [PROJECT_STATUS.md](docs/PROJECT_STATUS.md) (living roadmap of what's built and what's next).
+- [docs/](docs/) — canonical operating references: the master index, the tracker CSV that drives the intake view, [PROJECT_STATUS.md](docs/PROJECT_STATUS.md) (living roadmap of what's built and what's next), and [DECISION_LOG.md](docs/DECISION_LOG.md) (closed design decisions).
 - [src/](src/) — React UI: Document Intake and Cash Flow Dashboard.
 - [src-tauri/](src-tauri/) — Tauri v2 shell, Rust commands, plugin permissions.
 - [server/](server/) — Python MCP server, schema, and supporting models.
+- [server/templates/](server/templates/) — copy-into-watch-root templates: `check_register.template.csv`, `check_deposits.template.csv`, `annual_household_reference.template.toml`.
+- [scripts/migrations/](scripts/migrations/) — one-off data migration scripts (run by hand, idempotent).
 - [.claudecowork/](.claudecowork/) — Financial Detective persona and MCP launch descriptor for Claude Cowork.
 - [.mcp.json](.mcp.json) — Generic MCP client config (used by Claude Code and other MCP-aware clients).
 
@@ -138,6 +140,33 @@ Examples that match cleanly:
 ```
 
 Each file is assigned to its single highest-scoring row, so a file never appears under multiple rows. The intake row's "Auto-matched" badge shows the matched filename and the score.
+
+## Watch-root data files
+
+In addition to the CSV transaction exports the auto-matcher picks up, the
+MCP server reads three optional analyst-maintained files from the watch
+root. Templates ship in [server/templates/](server/templates/) — copy
+them in and edit:
+
+- **`check_register.csv`** — outbound paper checks. Required columns
+  `account, check_number, date_written, amount, payee`; optional
+  category/lifecycle/role overrides. Read by `ingest_check_register`,
+  which writes a `transaction_overrides` row for every register entry
+  that resolves to a known transaction. Lines starting with `#` are
+  skipped.
+- **`check_deposits.csv`** — incoming mobile check deposits. Required
+  columns `account, date_deposited, amount, source`; same optional
+  overrides. Read by `ingest_check_deposit_ledger`. Setting
+  `primary_category = transfer` marks a deposit as an inter-account
+  transfer in disguise.
+- **`annual_household_reference.toml`** — year-end W-2 / 401(k) / HSA
+  / withholding totals, one `[[year]]` block per year. Read by
+  `get_annual_reference`. When populated, `compute_monthly_summary` /
+  `generate_monthly_summary` add an `annual_reference` section with
+  derived ratios (effective tax rate, gross-to-net ratio, pre-tax
+  savings rate); when absent or all-zero, the section is omitted.
+
+All three files are optional — the server runs without them.
 
 ## Connecting Claude Cowork
 
