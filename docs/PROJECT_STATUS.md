@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-21 (monthly cashflow bridge generator landed: `compute_monthly_summary` + `generate_monthly_summary` MCP tools, 13 tools total)
+**Last updated:** 2026-05-27 (data-quality pass landed: check register + mobile-deposit ledger ingestion, lifecycle audit tool, annual household reference TOML, subcategory taxonomy additions — 17 MCP tools total)
 
 ## Snapshot
 
@@ -112,6 +112,40 @@ badge currently runs on a v1 heuristic combining cash-flow, HYSA gate,
 and leakage signals; landing items 2-4 would let it drive against
 master-index §10's specific 401(k)/HSA/Roth/rental tests instead of
 coarse heuristics.
+
+**Data-quality pass (2026-05-27):** four new MCP tools and a subcategory
+expansion close three structural gaps that distorted downstream analysis:
+
+1. **`ingest_check_register`** reads `<watch_root>/check_register.csv` and
+   writes durable overrides for outbound paper checks. Strict regex match
+   on `CHECK# <n>` first, ±10-day date fallback when strict fails, with
+   ambiguous fallbacks surfaced for manual triage. Template at
+   [server/templates/check_register.template.csv](../server/templates/check_register.template.csv).
+2. **`ingest_check_deposit_ledger`** reads `<watch_root>/check_deposits.csv`
+   and writes overrides for incoming `MOBILE CHECK DEP` rows. Match key is
+   `(account_id, amount, occurred_on ± 3 days)`. Default categorization
+   `income`, overridable per row (rental/business/transfer/etc.). Template
+   at [server/templates/check_deposits.template.csv](../server/templates/check_deposits.template.csv).
+3. **`list_lifecycle_audit_candidates`** surfaces transactions whose
+   lifecycle / category looks suspicious (one_time-but-recurring,
+   recurring-singleton, large discretionary one_time, high-value pet_care).
+   Read-only — does not auto-reclassify.
+4. **`get_annual_reference`** reads `<watch_root>/annual_household_reference.toml`
+   for year-end W-2 / 401(k) / HSA / withholding totals. Used by
+   `compute_monthly_summary` / `generate_monthly_summary` to add an
+   `annual_reference` section (effective tax rate, gross-to-net ratio,
+   pre-tax savings rate) when populated; omitted when not, so zeros never
+   leak into the output. Template at
+   [server/templates/annual_household_reference.template.toml](../server/templates/annual_household_reference.template.toml).
+
+**Subcategory taxonomy** gained `landscaping` and `home_maintenance` under
+`fixed_obligation`, `home_improvement` under `abnormal`, and
+`business_income` under `income`. The `dining` orphan label was retired in
+favor of `dining_out`; a one-time migration script at
+[scripts/migrations/2026-05-27_consolidate_dining_orphan.py](../scripts/migrations/2026-05-27_consolidate_dining_orphan.py)
+rewrites the affected row through the same override path the UI uses.
+Decision-log entries for each change live in
+[docs/DECISION_LOG.md](DECISION_LOG.md).
 
 **Monthly cashflow bridge generator (2026-05-21):** the monthly bridge
 document generator is live. Two new MCP tools — `compute_monthly_summary`
@@ -223,7 +257,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Unpaired Ally HYSA `Requested transfer from …` rows auto-reclassified as `direction='inflow'` after the pairing pass (`ally_inbound_reclassified` reported in `PairTransfersResult`)
 
 ### MCP integration
-- [x] 7 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`
+- [x] 17 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`, `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`, `refresh_hysa_gate`, `compute_monthly_summary`, `generate_monthly_summary`, `ingest_check_register`, `ingest_check_deposit_ledger`, `list_lifecycle_audit_candidates`, `get_annual_reference`
 - [x] 4 resources: `docs://master-index`, `docs://tracker`, `docs://project-status`, `watch://recent-events`
 - [x] 1 spending-first prompt: `financial_detective`
 - [x] Wired to Claude Desktop via [`%APPDATA%\Claude\claude_desktop_config.json`](https://docs.anthropic.com)
@@ -370,6 +404,8 @@ normal use of the repo for transaction-based spending analysis.
 - [x] **Untagged transfer patterns from Beacon parser** — FID BKG SVC LLC MONEYLINE, VENMO PAYMENT, and MOBILE CHECK DEP are now covered by classifier rules added in the second pass.
 - [x] **Watch-root Cowork project isolation resolved.** `C:\Users\Jeff\Documents\Cashflow\.claudecowork` is now a junction to the repo `.claudecowork\` directory — `agent.md`, `config.json`, and `mcp-server.json` are shared automatically. No manual mirroring needed.
 - [x] **Three Ally HYSA inbound transfers have no Beacon counterpart — resolved.** $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). `pair_transfers` now auto-reclassifies unpaired Ally HYSA inbound-from rows as `direction='inflow'`; these three rows will be corrected on the next tool run. The 1/5 row is confirmed as Jeff's bonus check deposit; origin of the 4/8 and 5/8 rows is still unconfirmed but both are correctly treated as inflows.
+- [ ] **Check register + deposit ledger templates need to be filled in.** Templates ship in [server/templates/](../server/templates/); copy `check_register.template.csv` → `<watch_root>/check_register.csv` and `check_deposits.template.csv` → `<watch_root>/check_deposits.csv`, fill them in, then run `ingest_check_register` / `ingest_check_deposit_ledger` from a Cowork session. Until done, the eight outbound check rows (series 179–182 and 209–212) and nine `MOBILE CHECK DEP` rows remain blind-classified.
+- [ ] **UI "Import Check Register" button deferred.** Tauri has no MCP transport today; ledger imports happen via Cowork. See [DECISION_LOG.md](DECISION_LOG.md) entry from 2026-05-27.
 - [ ] **Medium-confidence classifications to confirm** (flagged by second classifier pass, 2026-05-18):
   - Render, Supabase, Namecheap, GitHub, Roll20, OpenAI — currently `fixed_obligation/subscriptions_apps` (Jeff). Flip to `business_expense` if used for professional/author work.
   - PayLease / GW Management (10 rows, ~$10K+/yr) — currently `fixed_obligation/property_fees`. Confirm: primary-residence HOA, rental HOA, or rental management fees. Rental category may be more accurate.

@@ -30,6 +30,7 @@ from typing import Any
 from .balances import WealthBridgeConfig
 from .computed_balance import ALLY_HYSA_ACCOUNT_ID
 from .database import DatabaseManager
+from .models import AnnualReferenceEntry
 from .monthly_summary_flags import FlagInputs, detect_flags
 from .monthly_summary_renderer import write_monthly_summary
 
@@ -277,13 +278,61 @@ def _merchant_totals(
 # ---------------------------------------------------------------------------
 
 
+def _annual_reference_derived(entry: AnnualReferenceEntry) -> dict[str, Any]:
+    """Compute the ratios surfaced in the monthly summary's
+    ``annual_reference`` section. Only called when ``entry.populated`` is
+    True, so we can divide safely as long as gross is positive.
+    """
+    gross_total = entry.gross_w2_jeff + entry.gross_w2_ashley
+    withholding_total = (
+        entry.federal_withholding + entry.state_withholding + entry.fica_employee
+    )
+    pretax_deferrals = (
+        entry.contribution_401k_jeff
+        + entry.contribution_401k_ashley
+        + entry.hsa_contribution
+    )
+    net_take_home = gross_total - withholding_total - pretax_deferrals
+    effective_tax_rate_pct = (
+        round(withholding_total / gross_total * 100.0, 2) if gross_total > 0 else None
+    )
+    gross_to_net_ratio = (
+        round(net_take_home / gross_total, 4) if gross_total > 0 else None
+    )
+    pretax_savings_rate_pct = (
+        round(pretax_deferrals / gross_total * 100.0, 2)
+        if gross_total > 0
+        else None
+    )
+    return {
+        "year": entry.year,
+        "gross_total": round(gross_total, 2),
+        "withholding_total": round(withholding_total, 2),
+        "pretax_deferrals_total": round(pretax_deferrals, 2),
+        "net_take_home_estimate": round(net_take_home, 2),
+        "effective_tax_rate_pct": effective_tax_rate_pct,
+        "gross_to_net_ratio": gross_to_net_ratio,
+        "pretax_savings_rate_pct": pretax_savings_rate_pct,
+        "notes": entry.notes,
+    }
+
+
 def compute_monthly_summary(
     database: DatabaseManager,
     wealth_bridge: WealthBridgeConfig,
     year: int,
     month: int,
+    annual_reference: AnnualReferenceEntry | None = None,
 ) -> dict[str, Any]:
-    """Compute the structured monthly summary dict. Pure — no file I/O."""
+    """Compute the structured monthly summary dict. Pure — no file I/O.
+
+    When ``annual_reference`` is supplied and ``.populated`` is True (i.e.
+    the user has filled in at least one nonzero W-2/401(k)/HSA value), an
+    additional ``annual_reference`` section is added to the output with
+    effective tax rate, gross-to-net ratio, and pre-tax savings rate.
+    Absent reference data simply omits the section rather than reporting
+    zeros — those would be misleading.
+    """
     month_start, next_month_start = _month_window(year, month)
     prior_year, prior_month = _add_months(year, month, -1)
     prior_start, prior_next = _month_window(prior_year, prior_month)
@@ -434,7 +483,7 @@ def compute_monthly_summary(
             }
         )
 
-    return {
+    summary_dict: dict[str, Any] = {
         "period": {"year": year, "month": month, "label": f"{year:04d}-{month:02d}"},
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "hysa": {
@@ -491,6 +540,9 @@ def compute_monthly_summary(
             "merchant_normalization": MERCHANT_NORMALIZATION_RULE,
         },
     }
+    if annual_reference is not None and annual_reference.populated:
+        summary_dict["annual_reference"] = _annual_reference_derived(annual_reference)
+    return summary_dict
 
 
 def generate_monthly_summary(
@@ -499,6 +551,7 @@ def generate_monthly_summary(
     year: int,
     month: int,
     output_root: Path,
+    annual_reference: AnnualReferenceEntry | None = None,
 ) -> dict[str, Any]:
     """Compute the summary, render + write the markdown, return the dict.
 
@@ -509,7 +562,9 @@ def generate_monthly_summary(
     Invoked by the Cowork scheduled task on the 1st of each month — see the
     module docstring for the scheduling contract.
     """
-    summary = compute_monthly_summary(database, wealth_bridge, year, month)
+    summary = compute_monthly_summary(
+        database, wealth_bridge, year, month, annual_reference=annual_reference
+    )
     markdown_path, manual_preserved = write_monthly_summary(
         summary, output_root, wealth_bridge.monthly_summary_output_dir
     )

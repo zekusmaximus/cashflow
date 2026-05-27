@@ -1805,18 +1805,23 @@ const PRIMARY_CATEGORIES = [
 // Subcategories are grouped by their parent primary category. The select
 // resets its value whenever the user switches the primary category to a value
 // for which the current subcategory is not valid.
+// `dining` retired 2026-05-27 in favor of `dining_out` — see docs/DECISION_LOG.md.
+// `landscaping`, `home_maintenance` added under fixed_obligation; `home_improvement`
+// added under abnormal; `business_income` added under income — see the same entry.
 const SUBCATEGORY_BY_PRIMARY: Record<string, readonly string[]> = {
   income: [
     'payroll', 'bonus', 'rsu_proceeds', 'interest',
-    'check_deposit', 'rental_income', 'reimbursement', 'refund', 'other_income',
+    'check_deposit', 'rental_income', 'business_income',
+    'reimbursement', 'refund', 'other_income',
   ],
   fixed_obligation: [
     'mortgage', 'rent', 'insurance', 'utilities',
     'subscriptions_apps', 'streaming', 'loan_payment', 'property_fees',
+    'landscaping', 'home_maintenance',
     'tuition', 'other_fixed',
   ],
   variable_lifestyle: [
-    'groceries', 'dining', 'amazon', 'pets', 'travel', 'clothing',
+    'groceries', 'dining_out', 'amazon', 'pets', 'travel', 'clothing',
     'entertainment', 'gifts', 'software', 'personal_care',
     'home_goods', 'intra_household', 'other_variable',
   ],
@@ -1828,7 +1833,7 @@ const SUBCATEGORY_BY_PRIMARY: Record<string, readonly string[]> = {
   ],
   medical: ['doctor', 'pharmacy', 'dental', 'vision', 'hsa_expense', 'insurance_premium', 'vet', 'pet_medical'],
   investment: ['401k', 'hsa_contribution', 'roth_ira', 'brokerage', 'rsu', 'other_investment'],
-  abnormal: ['home_repair', 'vehicle', 'legal', 'emergency', 'one_time_purchase', 'other_abnormal'],
+  abnormal: ['home_repair', 'home_improvement', 'vehicle', 'legal', 'emergency', 'one_time_purchase', 'other_abnormal'],
   unclassified: [],
 };
 
