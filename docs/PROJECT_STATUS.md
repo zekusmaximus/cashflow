@@ -265,8 +265,8 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 
 ### Durable overrides
 
-- [x] `transaction_overrides` table keyed by a source-independent match key (account + date + amount + normalized description)
-- [x] `upsert_transaction_override` MCP tool stores payee/category/role/lifecycle/note overrides and reapplies them to future re-imports
+- [x] `transaction_overrides` table keyed by a source-independent match key derived server-side from (account + date + amount + normalized description). The match key is *generated*, not supplied by the caller.
+- [x] `upsert_transaction_override` MCP tool. **Input:** `transaction_id` plus any of `merchant_normalized`, `primary_category`, `subcategory`, `lifecycle`, `household_role`, `note`. The match key is computed from the resolved transaction; the caller does not (and cannot) pass `account_id` / `occurred_on` / `amount` / `description` directly — those four are rejected as `extra_forbidden`. Storing against the match key is what lets the override survive future re-imports of the same row.
 - [x] Existing matching transactions are updated immediately; future monthly imports inherit the same override even when `source_document_name` changes
 
 ### Frontend

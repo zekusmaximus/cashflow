@@ -1808,6 +1808,9 @@ const PRIMARY_CATEGORIES = [
 // `dining` retired 2026-05-27 in favor of `dining_out` — see docs/DECISION_LOG.md.
 // `landscaping`, `home_maintenance` added under fixed_obligation; `home_improvement`
 // added under abnormal; `business_income` added under income — see the same entry.
+// `rental_mortgage` retired 2026-05-27 in favor of `mortgage` under primary_category=rental —
+// the rental context is carried by primary_category + household_role, so the subcategory
+// describes the payment kind, not whose property. See docs/DECISION_LOG.md.
 const SUBCATEGORY_BY_PRIMARY: Record<string, readonly string[]> = {
   income: [
     'payroll', 'bonus', 'rsu_proceeds', 'interest',
@@ -1828,7 +1831,7 @@ const SUBCATEGORY_BY_PRIMARY: Record<string, readonly string[]> = {
   transfer: [],
   tax: ['federal_tax', 'state_tax', 'estimated_tax', 'tax_payment', 'tax_refund'],
   rental: [
-    'rental_income', 'rental_expense', 'rental_mortgage', 'hoa',
+    'rental_income', 'rental_expense', 'mortgage', 'hoa',
     'rental_insurance', 'rental_repairs', 'rental_management',
   ],
   medical: ['doctor', 'pharmacy', 'dental', 'vision', 'hsa_expense', 'insurance_premium', 'vet', 'pet_medical'],
