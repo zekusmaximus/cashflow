@@ -7,6 +7,93 @@ here's why we won't revisit that for a while" calls.
 
 ---
 
+## 2026-05-27 — Retirement of `subcategory = 'rental_mortgage'`
+
+**Context.** The rental property mortgage (M & T Mortgage, $1,024.14 on
+the 6th of each month from Beacon checking) had drifted: four months
+classified as `rental/mortgage`, one month (2026-05-06, transaction
+`15fc3478-27d5-440c-8123-5a6dd2a5a46a`) as `rental/rental_mortgage`. The
+two values were treated as siblings in the UI dropdown even though they
+referred to the same payment.
+
+**Decision.** Retire `rental_mortgage`. The canonical subcategory for a
+mortgage payment is `mortgage`, regardless of whether the property is
+the primary residence or a rental. The rental context is already carried
+by `primary_category = 'rental'` and `household_role = 'rental'`, so
+prefixing the subcategory was redundant and invited drift.
+
+Concretely:
+
+- `rental_mortgage` removed from `SUBCATEGORY_BY_PRIMARY.rental` in
+  `src/features/dashboard/dashboard-view.tsx`. `mortgage` added in its
+  place, so the dropdown under `rental` lists the canonical value.
+- The seed `classification_rules` in `server/sql/schema.sql` do not emit
+  `rental_mortgage`; the offending rule was added at runtime in a prior
+  Cowork session and lives only in the local SQLite DB. The user
+  resolves it operationally by listing rules and updating any rule whose
+  `subcategory` is `rental_mortgage` to `mortgage`, then re-running
+  `apply_classifier(reclassify_all=true)` (or scoped to M & T Mortgage)
+  to settle the five rental-mortgage rows on the canonical value. A
+  one-row `upsert_transaction_override` on the May transaction is the
+  minimum fix; the rule update prevents regression on the next import.
+
+**Alternatives considered.**
+
+- *Keep both values as legitimate siblings.* Rejected. The data shows
+  drift, not two different concepts. One year of statements with this
+  taxonomy would have produced inconsistent rental-expense rollups.
+- *Canonicalise on `rental_mortgage` instead.* Rejected. Four of five
+  rows already use `mortgage`; the smaller migration wins, and
+  `mortgage` matches the primary-residence vocabulary.
+- *Add a CHECK constraint on `subcategory` enforcing the dropdown enum
+  at the DB layer.* Deferred. `subcategory` is intentionally free-text
+  (see the 2026-05-27 entry on `home_maintenance` /
+  `home_improvement` / `landscaping`). Closing that off is a larger
+  decision than this fix.
+
+**Drift sweep.** A query of the form
+
+```sql
+SELECT primary_category, merchant_normalized,
+       COUNT(DISTINCT subcategory) AS n_subs,
+       GROUP_CONCAT(DISTINCT subcategory) AS subs,
+       COUNT(*) AS n_txns
+FROM transactions
+WHERE merchant_normalized IS NOT NULL
+GROUP BY primary_category, merchant_normalized
+HAVING n_subs > 1
+ORDER BY n_txns DESC;
+```
+
+surfaces every (primary_category, merchant) pair classified into more
+than one subcategory. The user runs this against the live DB; any
+results beyond M & T Mortgage are surfaced here for adjudication, not
+migrated unilaterally.
+
+---
+
+## 2026-05-27 — `upsert_transaction_override` API input documented separately from storage key
+
+**Context.** `docs://project-status` previously described the override
+mechanism as "keyed by account + date + amount + normalized
+description." That sentence accurately described the *storage* key but
+read as if it described the API input. Multiple readers — including
+Cowork agents — built calls passing `account_id`, `occurred_on`,
+`amount`, and `description` directly and were rejected by the Pydantic
+schema with `extra_forbidden`.
+
+**Decision.** Rewrite the bullets in `docs/PROJECT_STATUS.md` under
+"Durable overrides" to call out the API input shape explicitly
+(`transaction_id` plus optional override fields) and clarify that the
+match key is *derived server-side* from the resolved transaction.
+Storage key vs. API input is now two sentences instead of one.
+
+The Pydantic model
+(`server/src/liquidity_gate_mcp/models.py:UpsertTransactionOverrideRequest`)
+is the source of truth and was not changed.
+
+---
+
 ## 2026-05-27 — Check register ingestion (`ingest_check_register`)
 
 **Context.** Eight outbound paper checks (series 179–182 and 209–212)
