@@ -57,7 +57,14 @@ CREATE TABLE IF NOT EXISTS transactions (
   statement_period TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (source_document_name, source_record_key),
+  -- Dedup identity is account-scoped, not file-scoped: the same transaction
+  -- must collapse to one row whether it arrives in a YTD export or a
+  -- per-month file. source_record_key is derived from stable transaction
+  -- content (date + amount + normalized description + occurrence ordinal),
+  -- so (account_id, source_record_key) uniquely identifies a transaction
+  -- across overlapping source documents. (Existing databases are migrated to
+  -- this constraint by scripts/migrations/2026-05-31_transactions_account_scoped_unique.py.)
+  UNIQUE (account_id, source_record_key),
   FOREIGN KEY (account_id) REFERENCES accounts(id),
   FOREIGN KEY (import_batch_id) REFERENCES import_batches(id)
 );
