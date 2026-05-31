@@ -270,22 +270,36 @@ def _resolve_statement_closing(
     if explicit is not None:
         return explicit, "balances_toml"
 
-    # 2. running_balance metadata on the last in-period transaction.
-    # Order by occurred_on DESC then by id DESC for a deterministic pick
-    # when multiple rows share the same date.
+    # 2. running_balance metadata on the last in-period date.
+    # Find the latest date that has any transaction for this account.
     cursor = connection.execute(
         """
-        SELECT metadata_json
+        SELECT MAX(occurred_on) AS last_date
           FROM transactions
          WHERE account_id = ?
            AND occurred_on <= ?
-         ORDER BY occurred_on DESC, id DESC
-         LIMIT 1
         """,
         (account.id, period_end.isoformat()),
     )
     row = cursor.fetchone()
-    if row is not None:
+    if row is None or row["last_date"] is None:
+        return None, None
+
+    last_date = row["last_date"]
+
+    # Load every row on that date that carries a running_balance.
+    cursor = connection.execute(
+        """
+        SELECT id, amount, metadata_json
+          FROM transactions
+         WHERE account_id = ?
+           AND occurred_on = ?
+        """,
+        (account.id, last_date),
+    )
+
+    candidates: list[dict] = []
+    for row in cursor.fetchall():
         try:
             metadata = json.loads(row["metadata_json"] or "{}")
         except json.JSONDecodeError:
@@ -293,11 +307,46 @@ def _resolve_statement_closing(
         rb = metadata.get("running_balance")
         if rb is not None:
             try:
-                return float(rb), "metadata_running_balance"
+                candidates.append(
+                    {
+                        "id": row["id"],
+                        "amount": float(row["amount"]),
+                        "running_balance": float(rb),
+                    }
+                )
             except (TypeError, ValueError):
                 pass
 
-    return None, None
+    if not candidates:
+        return None, None
+
+    if len(candidates) == 1:
+        return candidates[0]["running_balance"], "metadata_running_balance"
+
+    # Multiple rows share the last in-period date.  Reconstruct chronological
+    # order from the running-balance chain: row b immediately follows row a
+    # when round(a.running_balance + b.amount, 2) == round(b.running_balance, 2).
+    # The terminal row is the one with no successor (no other row follows it).
+    # id DESC is NOT used as a tiebreaker because ids are random UUIDs.
+    predecessor_ids: set[str] = set()
+    for a in candidates:
+        for b in candidates:
+            if a["id"] != b["id"]:
+                if round(a["running_balance"] + b["amount"], 2) == round(
+                    b["running_balance"], 2
+                ):
+                    predecessor_ids.add(a["id"])
+
+    terminals = [c for c in candidates if c["id"] not in predecessor_ids]
+
+    if len(terminals) == 1:
+        return terminals[0]["running_balance"], "metadata_running_balance"
+
+    # Chain is ambiguous (e.g. two rows with identical amounts and balances, or
+    # data inconsistency).  Prefer the highest running_balance as the most
+    # conservative pick and tag the source so the caller can spot the case.
+    best = max(candidates, key=lambda c: c["running_balance"])
+    return best["running_balance"], "metadata_running_balance_unresolved"
 
 
 def _existing_explanation(
