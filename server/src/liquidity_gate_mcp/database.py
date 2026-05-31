@@ -244,7 +244,7 @@ class DatabaseManager:
                 amount = self._normalize_amount(transaction.amount, transaction.direction)
                 transaction_id = self._find_existing_transaction_id(
                     cursor,
-                    transaction.source_document_name,
+                    transaction.account.source_key,
                     transaction.source_record_key,
                 )
                 payload = self._transaction_payload(transaction, batch_id, amount)
@@ -286,7 +286,7 @@ class DatabaseManager:
             for transaction in request.transactions:
                 transaction_id = self._find_existing_transaction_id(
                     cursor,
-                    transaction.source_document_name,
+                    transaction.account.source_key,
                     transaction.source_record_key,
                 )
                 if transaction_id:
@@ -421,12 +421,20 @@ class DatabaseManager:
     @staticmethod
     def _find_existing_transaction_id(
         cursor: sqlite3.Cursor,
-        source_document_name: str,
+        account_id: str,
         source_record_key: str,
     ) -> str | None:
+        # Dedup is scoped to the ACCOUNT, not the source filename. The
+        # parsers derive ``source_record_key`` from stable, file-independent
+        # transaction content (date + amount + normalized description, plus a
+        # deterministic occurrence ordinal), so the same transaction resolves
+        # to the same key whether it arrives in a YTD export or a per-month
+        # file. Matching on ``account_id`` therefore makes an overlapping
+        # re-import idempotent: a transaction already loaded from one document
+        # updates in place instead of inserting a duplicate from another.
         row = cursor.execute(
-            "SELECT id FROM transactions WHERE source_document_name = ? AND source_record_key = ?",
-            (source_document_name, source_record_key),
+            "SELECT id FROM transactions WHERE account_id = ? AND source_record_key = ?",
+            (account_id, source_record_key),
         ).fetchone()
         return row[0] if row else None
 

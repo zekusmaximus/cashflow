@@ -169,6 +169,18 @@ def normalize_flag(value: str) -> bool:
     return normalized in {"true", "yes", "y"} or "✓" in normalized or "☑" in normalized
 
 
+def _is_excluded_directory_segment(name: str) -> bool:
+    # Directories we never recurse into when scanning the watch root.
+    #  - ``archive`` holds superseded inputs (e.g. a YTD CSV replaced by
+    #    per-month files). Ingesting it re-imports retired data — the exact
+    #    footgun that doubled Chase in the 2026-05 monthly-migration pilot.
+    #  - Names beginning with ``.`` or ``_`` are conventional "set aside"
+    #    folders (``.git``, ``_superseded_inputs``, ``_probe_hold`` …): hidden
+    #    or held-back, never live inputs.
+    lowered = name.lower()
+    return lowered == "archive" or name.startswith(".") or name.startswith("_")
+
+
 def iter_candidate_files(scan_root: Path) -> list[Path]:
     if not scan_root.exists():
         return []
@@ -178,6 +190,14 @@ def iter_candidate_files(scan_root: Path) -> list[Path]:
         if not path.is_file():
             continue
         if any(part in IGNORED_DIRECTORIES for part in path.parts):
+            continue
+        # Only inspect directory segments *below* the scan root — the root
+        # itself may legitimately live under a dotted/underscored path
+        # (e.g. ``C:\Users\...\_work\watch``) without that disqualifying its
+        # contents. ``relative_to`` parts excludes the scan root and the
+        # filename is dropped via ``[:-1]``.
+        relative_dir_parts = path.relative_to(scan_root).parts[:-1]
+        if any(_is_excluded_directory_segment(part) for part in relative_dir_parts):
             continue
         # Generated artifacts (e.g. the monthly cashflow summaries) are .md
         # files. They must not be scored against tracker rows or fed to the
