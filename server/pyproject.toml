@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 liquidity-gate-mcp = "liquidity_gate_mcp.server:main"
 refresh-hysa-gate = "liquidity_gate_mcp.computed_balance:main"
+apply-classifier = "liquidity_gate_mcp.cli_classify:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/liquidity_gate_mcp"]
