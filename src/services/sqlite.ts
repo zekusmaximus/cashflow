@@ -1,4 +1,5 @@
 import type {
+  AccountOption,
   CashFlowMonth,
   DashboardRange,
   DashboardSnapshot,
@@ -9,8 +10,8 @@ import type {
   ReconciliationPeriod,
   SubscriptionAuditEntry,
   Transaction,
-  TransactionDirectionFilter,
   TransactionPage,
+  TransactionRegisterFilter,
 } from '../features/dashboard/types';
 import { dashboardMock } from '../features/dashboard/mock';
 import { projectHysaGate } from '../features/dashboard/hysa-projection';
@@ -514,10 +515,9 @@ interface TxRow {
   direction: string;
 }
 
-export async function getTransactionPage(filter: {
-  page: number;
-  direction: TransactionDirectionFilter;
-}): Promise<TransactionPage> {
+export async function getTransactionPage(
+  filter: TransactionRegisterFilter,
+): Promise<TransactionPage> {
   await bootstrapLocalDatabase();
   const database = await getDatabase();
   if (!database) {
@@ -526,23 +526,60 @@ export async function getTransactionPage(filter: {
 
   const offset = filter.page * TRANSACTION_PAGE_SIZE;
 
-  // whereClause is built from a controlled union type — no user-supplied string
-  // ever reaches the query, so conditional string construction is safe here.
-  const whereClause =
-    filter.direction === 'inflow'
-      ? "t.direction = 'inflow'"
-      : filter.direction === 'outflow'
-        ? "t.direction = 'outflow'"
-        : "t.direction != 'transfer'";
+  // Predicates are assembled from a mix of controlled-union literals (direction)
+  // and user-supplied values. Every user value is bound as a positional
+  // parameter ($n) — no free text is ever concatenated into the SQL.
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  // Direction is a controlled union — safe to inline. Preserves the
+  // transfer-exclusion invariant for the "all" view.
+  if (filter.direction === 'inflow') {
+    conditions.push("t.direction = 'inflow'");
+  } else if (filter.direction === 'outflow') {
+    conditions.push("t.direction = 'outflow'");
+  } else {
+    conditions.push("t.direction != 'transfer'");
+  }
+
+  if (filter.primaryCategory && filter.primaryCategory !== 'all') {
+    params.push(filter.primaryCategory);
+    conditions.push(`t.primary_category = $${params.length}`);
+  }
+
+  if (filter.accountId && filter.accountId !== 'all') {
+    params.push(filter.accountId);
+    conditions.push(`t.account_id = $${params.length}`);
+  }
+
+  const trimmedSearch = filter.search?.trim();
+  if (trimmedSearch) {
+    // SQLite LIKE is case-insensitive for ASCII by default. Bind the same
+    // pattern twice (once per column) to stay agnostic to the driver's
+    // numbered-parameter reuse semantics.
+    const pattern = `%${trimmedSearch}%`;
+    params.push(pattern);
+    const merchantIdx = params.length;
+    params.push(pattern);
+    const descIdx = params.length;
+    conditions.push(
+      `(t.merchant_normalized LIKE $${merchantIdx} OR t.description_raw LIKE $${descIdx})`,
+    );
+  }
+
+  const whereClause = conditions.join(' AND ');
 
   const countRows = await database.select<{ total: number }>(
     `SELECT COUNT(*) AS total
        FROM transactions t
        JOIN accounts a ON a.id = t.account_id
       WHERE ${whereClause}`,
+    params,
   );
   const total = countRows[0]?.total ?? 0;
 
+  const limitIdx = params.length + 1;
+  const offsetIdx = params.length + 2;
   const rows = await database.select<TxRow>(
     `SELECT
          t.id,
@@ -561,8 +598,8 @@ export async function getTransactionPage(filter: {
        JOIN accounts a ON a.id = t.account_id
       WHERE ${whereClause}
       ORDER BY t.occurred_on DESC, t.id DESC
-      LIMIT $1 OFFSET $2`,
-    [TRANSACTION_PAGE_SIZE, offset],
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    [...params, TRANSACTION_PAGE_SIZE, offset],
   );
 
   const mapped: Transaction[] = rows.map((r) => ({
@@ -581,6 +618,37 @@ export async function getTransactionPage(filter: {
   }));
 
   return { rows: mapped, total, page: filter.page, pageSize: TRANSACTION_PAGE_SIZE };
+}
+
+/**
+ * All accounts, for the register's account filter. Includes accounts with zero
+ * rows in the current direction filter — the dropdown is not pre-filtered.
+ */
+export async function getAccountOptions(): Promise<AccountOption[]> {
+  await bootstrapLocalDatabase();
+  const database = await getDatabase();
+  if (!database) return [];
+
+  const rows = await database.select<{ id: string; label: string }>(
+    `SELECT id, (institution || ' · ' || account_name) AS label
+       FROM accounts
+      ORDER BY account_name ASC`,
+  );
+  return rows.map((r) => ({ id: r.id, label: r.label }));
+}
+
+/** Count of rows still in the `unclassified` state — powers the header pill. */
+export async function getUnclassifiedCount(): Promise<number> {
+  await bootstrapLocalDatabase();
+  const database = await getDatabase();
+  if (!database) return 0;
+
+  const rows = await database.select<{ total: number }>(
+    `SELECT COUNT(*) AS total
+       FROM transactions
+      WHERE primary_category = 'unclassified'`,
+  );
+  return rows[0]?.total ?? 0;
 }
 
 // ── Transaction override ─────────────────────────────────────────────────────

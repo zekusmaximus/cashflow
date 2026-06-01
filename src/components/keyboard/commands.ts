@@ -50,6 +50,14 @@ export function buildCommandRegistry(ctx: CommandContext): Command[] {
       hint: 'view',
       action: () => ctx.setView('dashboard'),
     },
+    {
+      id: 'view:classify',
+      label: 'Go to Classify',
+      shortcut: `${MOD_KEY}3`,
+      hint: 'view',
+      keywords: ['classify', 'register', 'transactions', 'categorize', 'bucket'],
+      action: () => ctx.setView('classify'),
+    },
 
     // Intake filters
     {
