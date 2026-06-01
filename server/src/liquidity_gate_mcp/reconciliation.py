@@ -20,6 +20,16 @@ from .models import (
 # dollars-and-cents, so anything under half a cent is the same balance.
 BALANCE_EPSILON = 0.005
 
+# Effective date of the single undated ``[opening_balances]`` block in
+# balances.toml. By definition and by the file's own comment that seed is the
+# 12/31/2025 closing — i.e. the opening for the first 2026 period — so it
+# anchors the 2026-01 period and MUST NOT be chained across from any stale
+# prior-year stored period. If ``[opening_balances]`` later grows dated
+# per-account entries, this becomes a per-entry lookup (most recent seed whose
+# effective date is <= period_start); for now there is one block, effective
+# here.
+OPENING_SEED_EFFECTIVE_DATE = date(2025, 12, 31)
+
 # Surfaced in variance_explanation when same-day rows cannot be linked into a
 # single unbroken running-balance chain. Kept stable so the UI / a re-run can
 # detect it and so it does not silently corrupt the next period's opening.
@@ -183,19 +193,37 @@ def reconcile_periods(
             entry = balances.lookup(
                 account_id=account.id, institution=account.institution
             )
-            # Seed the first requested month. When this is NOT the account's
-            # first period (a stored row exists for an earlier period), chain
-            # from that period's stored closing — otherwise a single-month run
-            # in isolation would wrongly re-seed every month from the Jan-1
-            # balances.toml opening. Only the true first period uses the seed.
+            # Seed the first requested month.
+            #
+            # The balances.toml opening seed is the authoritative anchor for the
+            # period it represents — the first period on/after its effective
+            # date (2026-01 for the current 12/31/2025 block). The seed-anchored
+            # period MUST use the seed and MUST NOT chain from any prior stored
+            # period: doing so would re-seed January from a stale prior-year
+            # December row carrying the OLD, pre-correction seed.
+            #
+            # Only periods strictly *after* the seed-anchored period chain from
+            # the prior stored period's closing (statement preferred, else
+            # computed) — that is the single-month / mid-range rollforward, and
+            # it must never re-seed every month from the balances.toml opening.
             first_period_start = months[0][0] if months else None
             running_opening: float | None = entry.opening_balance
             if first_period_start is not None:
-                prior_closing = _prior_period_closing(
-                    connection, account.id, first_period_start
-                )
-                if prior_closing is not None:
-                    running_opening = prior_closing
+                seed = entry.opening_balance
+                anchor = _seed_anchor_period_start(OPENING_SEED_EFFECTIVE_DATE)
+                if seed is not None and first_period_start <= anchor:
+                    # The run starts at (or before) the period the seed anchors:
+                    # the seed wins; never chain across the seed boundary.
+                    running_opening = seed
+                else:
+                    # No seed for this account, or a period strictly after the
+                    # anchor: chain from the prior stored period when one
+                    # exists, otherwise fall back to the seed (or None).
+                    prior_closing = _prior_period_closing(
+                        connection, account.id, first_period_start
+                    )
+                    if prior_closing is not None:
+                        running_opening = prior_closing
             for period_start, period_end in months:
                 summary = _compute_period(
                     connection,
@@ -472,6 +500,22 @@ def _resolve_statement_closing(
     best = max(candidates, key=lambda c: c["running_balance"])
     note = AMBIGUOUS_INTRADAY_NOTE.format(date=last_date)
     return best["running_balance"], "metadata_running_balance_unresolved", note
+
+
+def _seed_anchor_period_start(effective: date) -> date:
+    """First calendar-month ``period_start`` on/after a seed's effective date.
+
+    A seed effective on the last day of a month (a statement close, e.g.
+    2025-12-31) is the opening for the *next* month, so it anchors that next
+    month's period (2026-01). A seed effective on the 1st anchors that same
+    month. The seed-anchored period is the chain root: it uses the seed and
+    does not chain from any earlier stored period.
+    """
+    if effective.day == 1:
+        return date(effective.year, effective.month, 1)
+    if effective.month == 12:
+        return date(effective.year + 1, 1, 1)
+    return date(effective.year, effective.month + 1, 1)
 
 
 def _prior_period_closing(
