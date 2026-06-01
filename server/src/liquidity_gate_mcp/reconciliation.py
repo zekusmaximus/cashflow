@@ -16,12 +16,118 @@ from .models import (
 )
 
 
+# Float tolerance when linking running-balance rows into a chain. Balances are
+# dollars-and-cents, so anything under half a cent is the same balance.
+BALANCE_EPSILON = 0.005
+
+# Surfaced in variance_explanation when same-day rows cannot be linked into a
+# single unbroken running-balance chain. Kept stable so the UI / a re-run can
+# detect it and so it does not silently corrupt the next period's opening.
+AMBIGUOUS_INTRADAY_NOTE = (
+    "Ambiguous intraday ordering: same-day rows on {date} could not be linked "
+    "into a single running-balance chain; closing balance derivation fell back "
+    "to the highest running balance and may be wrong."
+)
+
+
 @dataclass(frozen=True)
 class _Account:
     id: str
     institution: str
     account_name: str
     account_type: str
+
+
+@dataclass(frozen=True)
+class IntradayChain:
+    """Result of reconstructing one day's transactions from running balances.
+
+    ``closing`` is the terminal row's running balance (true end-of-day balance);
+    ``opening`` is the chain head's predecessor (``running_balance - amount`` of
+    the first row, i.e. the start-of-day balance). ``ambiguous`` is True when the
+    rows cannot be linked into a single unbroken chain — a gap, a fork, a cycle,
+    or a duplicate — in which case callers must NOT trust ``closing``/``opening``
+    and should surface the ambiguity instead of silently picking a row.
+    """
+
+    closing: float | None
+    opening: float | None
+    ambiguous: bool
+
+
+def reconstruct_intraday_chain(rows: list[dict]) -> IntradayChain:
+    """Order same-day transactions by their running-balance chain.
+
+    Each row must carry ``amount`` (signed) and ``running_balance`` (balance
+    AFTER the transaction posts). Row ``a`` immediately precedes row ``b`` when
+    ``a.running_balance == b.running_balance - b.amount`` (b's predecessor
+    balance), compared within :data:`BALANCE_EPSILON`.
+
+    * TERMINAL row (period closing) = the row whose running_balance is not any
+      other row's predecessor balance — it has no successor.
+    * CHAIN HEAD predecessor (period opening) = the predecessor balance that is
+      not equal to any row's running_balance — the balance the day started at.
+
+    Row/insertion order is never consulted; only the balances are. This is
+    robust to forward- (Beacon) and reverse-chronological (Webster) CSVs alike.
+    """
+    n = len(rows)
+    if n == 0:
+        return IntradayChain(closing=None, opening=None, ambiguous=True)
+
+    rbs = [float(r["running_balance"]) for r in rows]
+    preds = [float(r["running_balance"]) - float(r["amount"]) for r in rows]
+
+    if n == 1:
+        # Fast path: a lone row is its own terminal and head.
+        return IntradayChain(closing=rbs[0], opening=preds[0], ambiguous=False)
+
+    # successor[i] = the unique j that follows i (rb[i] == pred[j]).
+    successor: dict[int, int] = {}
+    predecessor: dict[int, int] = {}
+    ambiguous = False
+    for i in range(n):
+        succ = [
+            j for j in range(n) if j != i and abs(rbs[i] - preds[j]) <= BALANCE_EPSILON
+        ]
+        if len(succ) > 1:
+            ambiguous = True
+        if succ:
+            successor[i] = succ[0]
+    for j in range(n):
+        prev = [
+            i for i in range(n) if i != j and abs(rbs[i] - preds[j]) <= BALANCE_EPSILON
+        ]
+        if len(prev) > 1:
+            ambiguous = True
+        if prev:
+            predecessor[j] = prev[0]
+
+    terminals = [i for i in range(n) if i not in successor]
+    heads = [j for j in range(n) if j not in predecessor]
+
+    if ambiguous or len(terminals) != 1 or len(heads) != 1:
+        return IntradayChain(closing=None, opening=None, ambiguous=True)
+
+    # Walk head → terminal and confirm we visit every row exactly once. This
+    # rejects a chain split into two disjoint runs (which would also yield a
+    # single head/terminal pair only by coincidence) and any cycle.
+    head = heads[0]
+    visited: set[int] = set()
+    cur = head
+    while True:
+        if cur in visited:
+            return IntradayChain(closing=None, opening=None, ambiguous=True)
+        visited.add(cur)
+        if cur in successor:
+            cur = successor[cur]
+        else:
+            break
+
+    if len(visited) != n or cur != terminals[0]:
+        return IntradayChain(closing=None, opening=None, ambiguous=True)
+
+    return IntradayChain(closing=rbs[terminals[0]], opening=preds[head], ambiguous=False)
 
 
 @dataclass(frozen=True)
@@ -77,7 +183,19 @@ def reconcile_periods(
             entry = balances.lookup(
                 account_id=account.id, institution=account.institution
             )
+            # Seed the first requested month. When this is NOT the account's
+            # first period (a stored row exists for an earlier period), chain
+            # from that period's stored closing — otherwise a single-month run
+            # in isolation would wrongly re-seed every month from the Jan-1
+            # balances.toml opening. Only the true first period uses the seed.
+            first_period_start = months[0][0] if months else None
             running_opening: float | None = entry.opening_balance
+            if first_period_start is not None:
+                prior_closing = _prior_period_closing(
+                    connection, account.id, first_period_start
+                )
+                if prior_closing is not None:
+                    running_opening = prior_closing
             for period_start, period_end in months:
                 summary = _compute_period(
                     connection,
@@ -187,7 +305,7 @@ def _compute_period(
     else:
         computed_closing = round(opening + breakdown.net_signed, 2)
 
-    statement_closing, source = _resolve_statement_closing(
+    statement_closing, source, ambiguity_note = _resolve_statement_closing(
         connection,
         account=account,
         period_end=period_end,
@@ -201,6 +319,17 @@ def _compute_period(
     existing_explanation = _existing_explanation(
         connection, account.id, period_start, period_end
     )
+
+    # Surface an ambiguous intraday ordering so it cannot silently corrupt the
+    # next period's opening. Prepend it to any human note already present, but
+    # never duplicate it on idempotent re-runs.
+    explanation = existing_explanation
+    if ambiguity_note and ambiguity_note not in explanation:
+        explanation = (
+            ambiguity_note
+            if not explanation
+            else f"{ambiguity_note}\n{explanation}"
+        )
 
     return ReconciliationPeriodSummary(
         account_id=account.id,
@@ -217,7 +346,7 @@ def _compute_period(
         computed_transfers_out=round(breakdown.transfers_out, 2),
         computed_closing_balance=computed_closing,
         variance_amount=variance,
-        variance_explanation=existing_explanation,
+        variance_explanation=explanation,
     )
 
 
@@ -264,11 +393,17 @@ def _resolve_statement_closing(
     account: _Account,
     period_end: date,
     entry: AccountBalances,
-) -> tuple[float | None, str | None]:
+) -> tuple[float | None, str | None, str | None]:
+    """Return (closing_balance, source, ambiguity_note).
+
+    ``ambiguity_note`` is None unless same-day rows on the final active date
+    could not be linked into a single running-balance chain, in which case it
+    carries the message the caller should surface in variance_explanation.
+    """
     # 1. Explicit override in balances.toml — always wins.
     explicit = entry.statement_closings.get(period_end)
     if explicit is not None:
-        return explicit, "balances_toml"
+        return explicit, "balances_toml", None
 
     # 2. running_balance metadata on the last in-period date.
     # Find the latest date that has any transaction for this account.
@@ -283,7 +418,7 @@ def _resolve_statement_closing(
     )
     row = cursor.fetchone()
     if row is None or row["last_date"] is None:
-        return None, None
+        return None, None, None
 
     last_date = row["last_date"]
 
@@ -318,35 +453,58 @@ def _resolve_statement_closing(
                 pass
 
     if not candidates:
-        return None, None
+        return None, None, None
 
     if len(candidates) == 1:
-        return candidates[0]["running_balance"], "metadata_running_balance"
+        # Fast path: a single same-day row needs no chain reconstruction.
+        return candidates[0]["running_balance"], "metadata_running_balance", None
 
-    # Multiple rows share the last in-period date.  Reconstruct chronological
-    # order from the running-balance chain: row b immediately follows row a
-    # when round(a.running_balance + b.amount, 2) == round(b.running_balance, 2).
-    # The terminal row is the one with no successor (no other row follows it).
-    # id DESC is NOT used as a tiebreaker because ids are random UUIDs.
-    predecessor_ids: set[str] = set()
-    for a in candidates:
-        for b in candidates:
-            if a["id"] != b["id"]:
-                if round(a["running_balance"] + b["amount"], 2) == round(
-                    b["running_balance"], 2
-                ):
-                    predecessor_ids.add(a["id"])
+    # Multiple rows share the last in-period date. Reconstruct their true
+    # chronological order from the running-balance chain rather than trusting
+    # row/insertion order (which is forward for Beacon, reverse for Webster).
+    chain = reconstruct_intraday_chain(candidates)
+    if not chain.ambiguous and chain.closing is not None:
+        return chain.closing, "metadata_running_balance", None
 
-    terminals = [c for c in candidates if c["id"] not in predecessor_ids]
-
-    if len(terminals) == 1:
-        return terminals[0]["running_balance"], "metadata_running_balance"
-
-    # Chain is ambiguous (e.g. two rows with identical amounts and balances, or
-    # data inconsistency).  Prefer the highest running_balance as the most
-    # conservative pick and tag the source so the caller can spot the case.
+    # Chain is ambiguous (gap, fork, cycle, or duplicate). Do NOT silently pick
+    # a row: fall back to the highest running_balance but flag it so the note
+    # surfaces instead of corrupting the next period's opening.
     best = max(candidates, key=lambda c: c["running_balance"])
-    return best["running_balance"], "metadata_running_balance_unresolved"
+    note = AMBIGUOUS_INTRADAY_NOTE.format(date=last_date)
+    return best["running_balance"], "metadata_running_balance_unresolved", note
+
+
+def _prior_period_closing(
+    connection: sqlite3.Connection,
+    account_id: str,
+    period_start: date,
+) -> float | None:
+    """Closing balance of the period immediately preceding ``period_start``.
+
+    Used to seed a single-month (or mid-range) reconcile so its opening chains
+    from the prior stored period instead of the balances.toml seed. Prefers the
+    statement closing when present (matching the full-run rollforward), else the
+    computed closing. Returns None when no earlier period row exists, so the
+    caller falls back to the balances.toml opening.
+    """
+    row = connection.execute(
+        """
+        SELECT statement_closing_balance, computed_closing_balance
+          FROM reconciliation_periods
+         WHERE account_id = ?
+           AND period_end < ?
+         ORDER BY period_end DESC
+         LIMIT 1
+        """,
+        (account_id, period_start.isoformat()),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["statement_closing_balance"] is not None:
+        return float(row["statement_closing_balance"])
+    if row["computed_closing_balance"] is not None:
+        return float(row["computed_closing_balance"])
+    return None
 
 
 def _existing_explanation(
@@ -394,6 +552,10 @@ def _upsert(
           computed_transfers_out = excluded.computed_transfers_out,
           computed_closing_balance = excluded.computed_closing_balance,
           variance_amount = excluded.variance_amount,
+          -- excluded value already merges the prior human note (read in
+          -- _compute_period) with any system-generated ambiguity note, so
+          -- writing it back preserves the human note and persists the flag.
+          variance_explanation = excluded.variance_explanation,
           computed_at = CURRENT_TIMESTAMP
         """,
         (
