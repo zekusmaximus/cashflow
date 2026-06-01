@@ -7,6 +7,12 @@ import {
   upsertTransactionOverride,
   type UpsertTransactionOverrideParams,
 } from '../../services/sqlite';
+import {
+  applyClassificationRule,
+  isTauriRuntime,
+  type ApplyClassificationRuleResult,
+  type ClassificationRuleInput,
+} from '../../lib/tauri';
 import type {
   Transaction,
   TransactionDirectionFilter,
@@ -175,6 +181,93 @@ function buildOverrideParams(
   };
 }
 
+// ── Rule capture ─────────────────────────────────────────────────────────────
+// Manual UI rules occupy priority band 6–9 (default 8): below the structural
+// transfer-protection rules (priority 5) so a captured rule can never preempt
+// the transfer invariant, and above general seed rules (10) so a human
+// confirmation wins over the classifier's prior general guesses.
+
+const RULE_PRIORITY_MIN = 6;
+const RULE_PRIORITY_MAX = 9;
+const RULE_PRIORITY_DEFAULT = 8;
+
+const CONFIDENCE_OPTIONS = ['high', 'medium', 'low'] as const;
+
+// Direction filter offered for a captured rule. `transfer` is intentionally
+// absent — a UI rule must never reclassify a transfer-direction row.
+const RULE_DIRECTION_OPTIONS: { value: '' | 'inflow' | 'outflow'; label: string }[] = [
+  { value: '', label: 'Any direction' },
+  { value: 'outflow', label: 'Outflows only' },
+  { value: 'inflow', label: 'Inflows only' },
+];
+
+function clampPriority(value: number): number {
+  if (!Number.isFinite(value)) return RULE_PRIORITY_DEFAULT;
+  return Math.min(RULE_PRIORITY_MAX, Math.max(RULE_PRIORITY_MIN, Math.round(value)));
+}
+
+/** Escape regex metacharacters so a literal token matches literally. */
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Derive a sensible, narrow default pattern from a row. Prefer a distinctive
+ * alphabetic token from the normalized merchant; otherwise fall back to an
+ * escaped stem of the raw description with trailing store numbers / dates /
+ * reference codes stripped. When in doubt, under-match — the user can widen it
+ * and the live preview makes over-broad patterns obvious before saving.
+ */
+function deriveDefaultPattern(tx: Transaction): string {
+  const merchant = (tx.merchantNormalized ?? '').trim();
+  if (merchant) {
+    const token = merchant
+      .split(/\s+/)
+      .filter((t) => /[a-zA-Z]/.test(t))
+      .sort((a, b) => b.length - a.length)[0];
+    if (token) return escapeRegex(token);
+    return escapeRegex(merchant);
+  }
+
+  const raw = tx.descriptionRaw.trim();
+  // Drop a trailing reference tail (`#1234`, `*ABC`, dates, ids) then keep the
+  // first few descriptive tokens.
+  const stem = raw
+    .replace(/[#*].*$/, '')
+    .replace(/\s+\d[\d/\-:.]*\s*$/, '')
+    .trim();
+  const base = stem || raw;
+  return escapeRegex(base.split(/\s+/).slice(0, 3).join(' '));
+}
+
+interface RegexPreview {
+  ok: boolean;
+  count: number;
+  sample: string[];
+}
+
+/**
+ * Preview matches with the SAME semantics as the Python engine: case-insensitive
+ * `re.search` against `description_raw` (JS `RegExp.test` is also a search, not
+ * anchored). This is for the preview count only — the authoritative write always
+ * goes through the Python classifier.
+ */
+function previewMatches(pattern: string, rows: Transaction[]): RegexPreview {
+  if (!pattern.trim()) return { ok: true, count: 0, sample: [] };
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, 'i');
+  } catch {
+    return { ok: false, count: 0, sample: [] };
+  }
+  const matched = rows.filter((r) => re.test(r.descriptionRaw));
+  return {
+    ok: true,
+    count: matched.length,
+    sample: matched.slice(0, 5).map((r) => r.descriptionRaw),
+  };
+}
+
 // ── Public entry points ──────────────────────────────────────────────────────
 
 /**
@@ -226,6 +319,9 @@ function RegisterPanel({
 }: RegisterPanelProps) {
   const queryClient = useQueryClient();
   const accountsQuery = useAccountOptions();
+
+  // Inline confirmation after a rule-apply round-trip through the Python engine.
+  const [ruleNotice, setRuleNotice] = useState<ApplyClassificationRuleResult | null>(null);
 
   const query = useTransactionRegister({
     page: filter.page,
@@ -442,6 +538,24 @@ function RegisterPanel({
         />
       )}
 
+      {/* Rule-apply confirmation */}
+      {ruleNotice && (
+        <div className="mx-5 mb-3 flex items-center gap-2 rounded-lg border border-moss/40 bg-moss/[0.08] px-3 py-2 text-[12px] text-ink">
+          <span className="font-medium">Rule applied.</span>
+          <span className="text-ink/70">
+            {ruleNotice.matched ?? 0} of {ruleNotice.scanned ?? 0} transaction
+            {(ruleNotice.matched ?? 0) === 1 ? '' : 's'} re-bucketed through the classifier.
+          </span>
+          <button
+            type="button"
+            onClick={() => setRuleNotice(null)}
+            className="ml-auto rounded-md px-2 py-0.5 text-[11px] text-ink/55 hover:bg-ink/[0.06] hover:text-ink"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {query.isLoading ? (
         <div className="px-5 pb-5 text-[13px] text-ink/50">Loading transactions…</div>
       ) : query.isError || !data ? (
@@ -484,9 +598,11 @@ function RegisterPanel({
                   <TransactionRow
                     key={tx.id}
                     tx={tx}
+                    loadedRows={rows}
                     selected={selectedIds.has(tx.id)}
                     onToggleSelect={() => toggleSelect(tx.id)}
                     onApplyToMatching={applyToMatching}
+                    onRuleApplied={setRuleNotice}
                   />
                 ))}
               </tbody>
@@ -621,13 +737,6 @@ function BulkActionBar({
         {pending ? 'Applying…' : `Apply to ${count}`}
       </button>
 
-      <span
-        title="coming soon — needs classifier wiring"
-        className="cursor-not-allowed select-none rounded-md border border-dashed border-ink/20 px-2 py-1 text-[11px] text-ink/35"
-      >
-        Save as rule
-      </span>
-
       <button
         type="button"
         onClick={onClear}
@@ -645,17 +754,23 @@ type EditField = 'merchant' | 'category';
 
 function TransactionRow({
   tx,
+  loadedRows,
   selected,
   onToggleSelect,
   onApplyToMatching,
+  onRuleApplied,
 }: {
   tx: Transaction;
+  /** Currently-loaded rows, used for the rule-capture live match preview. */
+  loadedRows: Transaction[];
   selected: boolean;
   onToggleSelect: () => void;
   onApplyToMatching: (source: Transaction, draft: ClassificationDraft) => void;
+  onRuleApplied: (result: ApplyClassificationRuleResult) => void;
 }) {
   const queryClient = useQueryClient();
   const [editField, setEditField] = useState<EditField | null>(null);
+  const [showRulePanel, setShowRulePanel] = useState(false);
 
   // Merchant edit state
   const [merchantDraft, setMerchantDraft] = useState('');
@@ -725,7 +840,10 @@ function TransactionRow({
     }
   };
 
-  const cancelEdit = () => setEditField(null);
+  const cancelEdit = () => {
+    setEditField(null);
+    setShowRulePanel(false);
+  };
 
   const currentDraft = (): ClassificationDraft => ({
     primary: primaryDraft.trim(),
@@ -946,12 +1064,37 @@ function TransactionRow({
               </button>
               <button
                 type="button"
+                onMouseDown={(e) => { e.preventDefault(); setShowRulePanel((v) => !v); }}
+                title="Capture a durable classification rule from this row and apply it through the classifier"
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-[10px] font-medium',
+                  showRulePanel
+                    ? 'bg-tide/20 text-tide'
+                    : 'bg-ink/[0.06] text-ink/70 hover:bg-ink/[0.1]',
+                )}
+              >
+                Save as rule…
+              </button>
+              <button
+                type="button"
                 onMouseDown={(e) => { e.preventDefault(); cancelEdit(); }}
                 className="rounded px-1.5 py-0.5 text-[10px] text-ink/55 hover:bg-ink/[0.06]"
               >
                 Cancel
               </button>
             </div>
+            {showRulePanel && (
+              <RuleCapturePanel
+                source={tx}
+                initial={currentDraft()}
+                loadedRows={loadedRows}
+                onClose={() => setShowRulePanel(false)}
+                onApplied={(result) => {
+                  onRuleApplied(result);
+                  cancelEdit();
+                }}
+              />
+            )}
           </div>
         ) : (
           <button
@@ -976,6 +1119,273 @@ function TransactionRow({
         {isOutflow ? '−' : '+'}{currency(Math.abs(tx.amount))}
       </td>
     </tr>
+  );
+}
+
+// ── Rule capture panel ───────────────────────────────────────────────────────
+
+function RuleCapturePanel({
+  source,
+  initial,
+  loadedRows,
+  onClose,
+  onApplied,
+}: {
+  source: Transaction;
+  initial: ClassificationDraft;
+  loadedRows: Transaction[];
+  onClose: () => void;
+  onApplied: (result: ApplyClassificationRuleResult) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [pattern, setPattern] = useState(() => deriveDefaultPattern(source));
+  const [primary, setPrimary] = useState(
+    initial.primary || (source.primaryCategory === 'unclassified' ? '' : source.primaryCategory),
+  );
+  const [subcategory, setSubcategory] = useState(initial.subcategory);
+  const [role, setRole] = useState(initial.role);
+  const [lifecycle, setLifecycle] = useState(initial.lifecycle);
+  const [confidence, setConfidence] = useState<string>('high');
+  // Default to the source row's direction so a rule built from an outflow never
+  // matches transfers/inflows. `transfer` is never offered.
+  const [directionFilter, setDirectionFilter] = useState<'' | 'inflow' | 'outflow'>(
+    source.direction === 'inflow' || source.direction === 'outflow' ? source.direction : '',
+  );
+  const [priority, setPriority] = useState(RULE_PRIORITY_DEFAULT);
+  const [error, setError] = useState<string | null>(null);
+
+  const subOptions = SUBCATEGORY_BY_PRIMARY[primary] ?? [];
+  const preview = useMemo(() => previewMatches(pattern, loadedRows), [pattern, loadedRows]);
+  const hasOutput = Boolean(primary || subcategory || role || lifecycle);
+  const desktop = isTauriRuntime();
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      const rule: ClassificationRuleInput = {
+        pattern: pattern.trim(),
+        account_filter: null,
+        direction_filter: directionFilter || null,
+        primary_category: primary || null,
+        subcategory: subcategory || null,
+        household_role: role || null,
+        lifecycle: lifecycle || null,
+        confidence,
+        priority: clampPriority(priority),
+        notes: `Captured from register (${source.descriptionRaw.slice(0, 60)})`,
+      };
+      return applyClassificationRule(rule, true);
+    },
+    onSuccess: (result) => {
+      if (!result.ok) {
+        setError(result.error ?? 'Classifier returned an error.');
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ['transaction-register'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-snapshot'] });
+      queryClient.invalidateQueries({ queryKey: ['unclassified-count'] });
+      onApplied(result);
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : String(err));
+    },
+  });
+
+  const canSave =
+    desktop && preview.ok && Boolean(pattern.trim()) && hasOutput && !mutation.isPending;
+
+  const handleSave = () => {
+    setError(null);
+    if (!pattern.trim()) return setError('Pattern is required.');
+    if (!preview.ok) return setError('Pattern is not a valid regular expression.');
+    if (!hasOutput) return setError('Pick at least one target field (category, owner, or lifecycle).');
+    mutation.mutate();
+  };
+
+  const fieldClasses =
+    'w-full rounded border border-ink/15 bg-white px-1.5 py-0.5 text-[11px] font-mono text-ink outline-none focus:border-tide';
+
+  return (
+    <div
+      onMouseDown={(e) => e.stopPropagation()}
+      className="mt-2 flex w-[320px] flex-col gap-2 rounded-lg border border-tide/30 bg-tide/[0.04] p-2.5"
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-tide">
+          Capture rule
+        </span>
+        <button
+          type="button"
+          onMouseDown={(e) => { e.preventDefault(); onClose(); }}
+          className="rounded px-1.5 py-0.5 text-[10px] text-ink/55 hover:bg-ink/[0.06]"
+        >
+          Close
+        </button>
+      </div>
+
+      {/* Pattern + live preview */}
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-medium text-ink/55">Pattern (regex, case-insensitive)</span>
+        <input
+          value={pattern}
+          onChange={(e) => setPattern(e.target.value)}
+          spellCheck={false}
+          className={fieldClasses}
+          aria-label="Rule pattern"
+        />
+      </label>
+      <div className="rounded border border-ink/8 bg-white/60 px-2 py-1.5 text-[11px]">
+        {!preview.ok ? (
+          <span className="text-ember">Invalid regular expression.</span>
+        ) : (
+          <>
+            <span className="font-medium text-ink">
+              matches {preview.count} transaction{preview.count === 1 ? '' : 's'}
+            </span>
+            <span className="text-ink/45"> (in the loaded set)</span>
+            {preview.sample.length > 0 && (
+              <ul className="mt-1 space-y-0.5 text-[10px] text-ink/55">
+                {preview.sample.map((desc, i) => (
+                  <li key={i} className="truncate font-mono">{desc}</li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Target fields */}
+      <div className="grid grid-cols-2 gap-1.5">
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-ink/55">Category</span>
+          <select
+            value={primary}
+            onChange={(e) => {
+              const next = e.target.value;
+              setPrimary(next);
+              if (!(SUBCATEGORY_BY_PRIMARY[next] ?? []).includes(subcategory)) setSubcategory('');
+            }}
+            className={fieldClasses}
+            aria-label="Rule primary category"
+          >
+            <option value="">— none —</option>
+            {PRIMARY_CATEGORIES.map((cat) => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-ink/55">Subcategory</span>
+          <select
+            value={subcategory}
+            onChange={(e) => setSubcategory(e.target.value)}
+            disabled={subOptions.length === 0}
+            className={cn(fieldClasses, subOptions.length === 0 && 'opacity-40')}
+            aria-label="Rule subcategory"
+          >
+            <option value="">— none —</option>
+            {subOptions.map((sub) => (
+              <option key={sub} value={sub}>{sub}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-ink/55">Owner</span>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className={fieldClasses}
+            aria-label="Rule household role"
+          >
+            <option value="">— none —</option>
+            {HOUSEHOLD_ROLES.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-ink/55">Lifecycle</span>
+          <select
+            value={lifecycle}
+            onChange={(e) => setLifecycle(e.target.value)}
+            className={fieldClasses}
+            aria-label="Rule lifecycle"
+          >
+            <option value="">— none —</option>
+            {LIFECYCLES.map((lc) => (
+              <option key={lc} value={lc}>{lc}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-ink/55">Direction</span>
+          <select
+            value={directionFilter}
+            onChange={(e) => setDirectionFilter(e.target.value as '' | 'inflow' | 'outflow')}
+            className={fieldClasses}
+            aria-label="Rule direction filter"
+          >
+            {RULE_DIRECTION_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-ink/55">Confidence</span>
+          <select
+            value={confidence}
+            onChange={(e) => setConfidence(e.target.value)}
+            className={fieldClasses}
+            aria-label="Rule confidence"
+          >
+            {CONFIDENCE_OPTIONS.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-ink/55">
+            Priority ({RULE_PRIORITY_MIN}–{RULE_PRIORITY_MAX})
+          </span>
+          <input
+            type="number"
+            min={RULE_PRIORITY_MIN}
+            max={RULE_PRIORITY_MAX}
+            value={priority}
+            onChange={(e) => setPriority(clampPriority(Number(e.target.value)))}
+            className={fieldClasses}
+            aria-label="Rule priority"
+          />
+        </label>
+      </div>
+
+      {!desktop && (
+        <p className="text-[10px] leading-relaxed text-clay">
+          Applying rules runs the Python classifier — available in the desktop app only.
+        </p>
+      )}
+      {error && <p className="text-[10px] leading-relaxed text-ember">{error}</p>}
+
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          disabled={!canSave}
+          onMouseDown={(e) => { e.preventDefault(); handleSave(); }}
+          className={cn(
+            'rounded px-2.5 py-1 text-[11px] font-medium transition-colors',
+            canSave ? 'bg-tide text-white hover:bg-tide/90' : 'cursor-not-allowed bg-ink/[0.06] text-ink/30',
+          )}
+        >
+          {mutation.isPending ? 'Applying…' : 'Create rule & apply'}
+        </button>
+        <button
+          type="button"
+          onMouseDown={(e) => { e.preventDefault(); onClose(); }}
+          className="rounded px-2 py-1 text-[11px] text-ink/55 hover:bg-ink/[0.06] hover:text-ink"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
