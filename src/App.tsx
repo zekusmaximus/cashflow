@@ -6,8 +6,15 @@ import { buildCommandRegistry, type CategoryRef } from './components/keyboard/co
 import { useKeyboardShortcuts } from './components/keyboard/use-keyboard-shortcuts';
 import { DashboardView } from './features/dashboard/dashboard-view';
 import { DocumentIntakeView } from './features/document-intake/document-intake-view';
+import {
+  RegisterView,
+  DEFAULT_REGISTER_FILTER,
+  loadPersistedRegisterFilter,
+  type RegisterFilterState,
+} from './features/register/register-view';
 import { useDashboard } from './hooks/use-dashboard';
 import { useDocumentChecklist } from './hooks/use-document-checklist';
+import { useUnclassifiedCount } from './hooks/use-unclassified-count';
 import { revealInFileManager } from './lib/tauri';
 import { bootstrapLocalDatabase } from './services/sqlite';
 import type { DashboardRange } from './features/dashboard/types';
@@ -22,13 +29,27 @@ function categoryDisplayName(category: string): string {
 }
 
 export default function App() {
-  const [view, setView] = useState<AppView>('intake');
+  const [view, setView] = useState<AppView>('classify');
   const [dashboardRange, setDashboardRange] = useState<DashboardRange>('ytd');
   const [filter, setFilter] = useState<ChecklistFilter>(DEFAULT_CHECKLIST_FILTER);
+  const [registerFilter, setRegisterFilter] = useState<RegisterFilterState>(
+    loadPersistedRegisterFilter,
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   const checklistQuery = useDocumentChecklist();
   const dashboardQuery = useDashboard(dashboardRange);
+  const unclassifiedQuery = useUnclassifiedCount();
+
+  // Deep-link the Classify view to the unclassified-only working set.
+  const navigateToUnclassified = useCallback(() => {
+    setView('classify');
+    setRegisterFilter({
+      ...DEFAULT_REGISTER_FILTER,
+      direction: 'all',
+      primaryCategory: 'unclassified',
+    });
+  }, []);
 
   useEffect(() => {
     void bootstrapLocalDatabase();
@@ -87,6 +108,7 @@ export default function App() {
     'mod+k': openPalette,
     'mod+1': () => setView('intake'),
     'mod+2': () => setView('dashboard'),
+    'mod+3': () => setView('classify'),
     'mod+shift+r': triggerForceRescan,
   });
 
@@ -97,8 +119,12 @@ export default function App() {
         onViewChange={setView}
         liquidityGateCurrent={dashboardQuery.data?.gates[0]?.currentAmount ?? 0}
         liquidityGate={dashboardQuery.data?.gates[0]?.targetAmount ?? 80000}
+        unclassifiedCount={unclassifiedQuery.data ?? 0}
+        onNavigateUnclassified={navigateToUnclassified}
       >
-        {view === 'intake' ? (
+        {view === 'classify' ? (
+          <RegisterView filter={registerFilter} onFilterChange={setRegisterFilter} />
+        ) : view === 'intake' ? (
           <DocumentIntakeView
             query={checklistQuery}
             filter={filter}
