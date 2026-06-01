@@ -217,6 +217,45 @@ class DatabaseManager:
             note=override["note"],
         )
 
+    def reapply_all_overrides(self) -> int:
+        """Re-stamp every stored manual override back onto its transactions.
+
+        Defense-in-depth companion to ``apply_classifier``: after a classify
+        pass (especially ``reclassify_all=True``) this walks every row in
+        ``transaction_overrides`` and re-applies its non-null fields onto the
+        matching transactions, re-stamping ``metadata_json.manual_override_
+        applied``. The ``reclassify_all`` skip-list already protects overridden
+        rows, so in practice this is a no-op safety net — but it guarantees a
+        manual override always wins even if a row's flag was lost. Returns the
+        number of transaction rows touched.
+        """
+        connection = self.connect()
+        try:
+            cursor = connection.cursor()
+            overrides = cursor.execute(
+                "SELECT match_key, account_id, occurred_on, amount, merchant_normalized, "
+                "primary_category, subcategory, household_role, lifecycle, note "
+                "FROM transaction_overrides"
+            ).fetchall()
+
+            updated = 0
+            for override in overrides:
+                updated += self._apply_override_to_existing_transactions(
+                    cursor,
+                    account_id=override["account_id"],
+                    occurred_on=override["occurred_on"],
+                    amount=float(override["amount"]),
+                    match_key=override["match_key"],
+                    override=override,
+                )
+            connection.commit()
+            return updated
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def _reconcile_commit(self, request: ReconcileTransactionsRequest) -> ReconcileTransactionsResult:
         batch_id = str(uuid4())
         inserted = 0
