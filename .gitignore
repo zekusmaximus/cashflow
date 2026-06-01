@@ -13,6 +13,8 @@ src-tauri/gen/
 server/.venv/
 server/.mypy_cache/
 server/.pytest_cache/
+# uv-generated lockfile from local test runs; not tracked upstream.
+server/uv.lock
 
 # Python bytecode caches at any depth
 **/__pycache__/
