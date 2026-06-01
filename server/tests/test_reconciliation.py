@@ -1086,3 +1086,232 @@ def test_first_period_still_uses_balances_seed(
     )
     summary = result.summaries[0]
     assert summary.statement_opening_balance == 3113.44
+
+
+# ---------------------------------------------------------------------------
+# BUG 3 — the balances.toml seed anchors its period; it must NOT chain from a
+# stale prior-year stored period that predates the seed.
+# ---------------------------------------------------------------------------
+# The single [opening_balances] block is the 12/31/2025 closing = the opening
+# for 2026-01. Leftover 2025 monthly periods from an earlier run carry the OLD
+# pre-correction seed as a flat closing; the chaining logic must not seed
+# January from December-2025's stale closing.
+
+
+def test_seed_anchored_period_ignores_stale_prior_year_closing(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    """DoD 1 — 2026-01 opens from the balances.toml seed, not the stale Dec row.
+
+    Beacon has leftover 2025 monthly periods carrying closing 16903.06 (the OLD
+    pre-correction seed) and a corrected balances.toml seed of 10684.54. The
+    seed-anchored period (2026-01) must use 10684.54 and must NOT chain from the
+    16903.06 December-2025 row.
+    """
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id="acct-beacon-9999",
+            institution="Beacon",
+            account_name="Checking",
+            account_type="checking",
+        )
+        # Leftover 2025 monthly periods, every one flat at the stale seed.
+        for month in range(1, 13):
+            last_day = 31 if month in (1, 3, 5, 7, 8, 10, 12) else 30
+            if month == 2:
+                last_day = 28
+            _insert_period_row(
+                connection,
+                account_id="acct-beacon-9999",
+                period_start=date(2025, month, 1),
+                period_end=date(2025, month, last_day),
+                statement_closing=16903.06,
+                computed_closing=16903.06,
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    balances = _balances_with(tmp_path, '[opening_balances]\nbeacon = 10684.54\n')
+    result = reconcile_periods(
+        database,
+        balances,
+        ReconcilePeriodsRequest(
+            period_start=date(2026, 1, 1), period_end=date(2026, 1, 31)
+        ),
+    )
+    summary = result.summaries[0]
+    # Seed wins — NOT the 16903.06 December-2025 stored closing.
+    assert summary.statement_opening_balance == 10684.54
+    # No transactions in January → closing carries the seed forward, variance 0.
+    assert summary.computed_closing_balance == 10684.54
+
+
+def test_post_anchor_period_still_chains_from_prior_stored_closing(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    """DoD 2 — 2026-02 chains from January's stored closing, not the seed.
+
+    A period strictly after the seed-anchored period uses the prior stored
+    period's closing (statement preferred over computed), exactly as the BUG 2
+    rollforward does.
+    """
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id="acct-beacon-9999",
+            institution="Beacon",
+            account_name="Checking",
+            account_type="checking",
+        )
+        # January already reconciled and stored: statement 11000.00 over a
+        # different computed 12000.00 — statement must win for the chain.
+        _insert_period_row(
+            connection,
+            account_id="acct-beacon-9999",
+            period_start=date(2026, 1, 1),
+            period_end=date(2026, 1, 31),
+            statement_closing=11000.00,
+            computed_closing=12000.00,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    balances = _balances_with(tmp_path, '[opening_balances]\nbeacon = 10684.54\n')
+    result = reconcile_periods(
+        database,
+        balances,
+        ReconcilePeriodsRequest(
+            period_start=date(2026, 2, 1), period_end=date(2026, 2, 28)
+        ),
+    )
+    summary = result.summaries[0]
+    # Chains from January's statement closing — not the 10684.54 seed.
+    assert summary.statement_opening_balance == 11000.00
+
+
+def test_seed_anchored_period_with_no_prior_periods_uses_seed(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    """DoD 3 — with no stale prior periods, 2026-01 still uses the seed."""
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id="acct-beacon-9999",
+            institution="Beacon",
+            account_name="Checking",
+            account_type="checking",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    balances = _balances_with(tmp_path, '[opening_balances]\nbeacon = 10684.54\n')
+    result = reconcile_periods(
+        database,
+        balances,
+        ReconcilePeriodsRequest(
+            period_start=date(2026, 1, 1), period_end=date(2026, 1, 31)
+        ),
+    )
+    summary = result.summaries[0]
+    assert summary.statement_opening_balance == 10684.54
+
+
+def test_no_seed_no_prior_period_opens_null(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    """DoD 4 — an account with no seed and no prior period opens with None."""
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id="acct-orphan",
+            institution="Mystery",
+            account_name="Checking",
+            account_type="checking",
+        )
+        _insert_tx(
+            connection,
+            account_id="acct-orphan",
+            occurred_on=date(2026, 1, 10),
+            amount=100.0,
+            direction="inflow",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    balances = _empty_balances(tmp_path)
+    result = reconcile_periods(
+        database,
+        balances,
+        ReconcilePeriodsRequest(
+            period_start=date(2026, 1, 1), period_end=date(2026, 1, 31)
+        ),
+    )
+    summary = result.summaries[0]
+    assert summary.statement_opening_balance is None
+    assert summary.computed_closing_balance is None
+
+
+def test_full_2026_run_january_seed_not_overwritten_by_stale_periods(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    """DoD 1+2 (integration) — full 2026-01→02 run over stale 2025 periods.
+
+    January anchors from the seed (10684.54); February chains in-memory from
+    January's closing. The stale 16903.06 December-2025 row never leaks in.
+    """
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id="acct-beacon-9999",
+            institution="Beacon",
+            account_name="Checking",
+            account_type="checking",
+        )
+        _insert_period_row(
+            connection,
+            account_id="acct-beacon-9999",
+            period_start=date(2025, 12, 1),
+            period_end=date(2025, 12, 31),
+            statement_closing=16903.06,
+            computed_closing=16903.06,
+        )
+        # One January inflow with a running balance so January gets a statement
+        # closing February can chain from.
+        _insert_tx(
+            connection,
+            account_id="acct-beacon-9999",
+            occurred_on=date(2026, 1, 15),
+            amount=1000.0,
+            direction="inflow",
+            metadata={"running_balance": 11684.54},
+            tx_id="beacon-jan-full",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    balances = _balances_with(tmp_path, '[opening_balances]\nbeacon = 10684.54\n')
+    result = reconcile_periods(
+        database,
+        balances,
+        ReconcilePeriodsRequest(
+            period_start=date(2026, 1, 1), period_end=date(2026, 2, 28)
+        ),
+    )
+    jan, feb = result.summaries
+    assert jan.statement_opening_balance == 10684.54
+    # 10684.54 + 1000 = 11684.54 computed, statement 11684.54 → zero variance.
+    assert jan.computed_closing_balance == 11684.54
+    assert jan.variance_amount == 0.0
+    # February opens from January's statement closing, not the stale December row.
+    assert feb.statement_opening_balance == 11684.54
