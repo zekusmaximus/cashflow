@@ -104,6 +104,27 @@ export interface TransactionPage {
 
 export type TransactionDirectionFilter = 'all' | 'inflow' | 'outflow';
 
+/**
+ * Filter shape consumed by `getTransactionPage` / `useTransactionRegister`.
+ * `primaryCategory` and `accountId` use the sentinel `'all'` to mean "no filter";
+ * `primaryCategory` also accepts `'unclassified'` (a state) plus any taxonomy value.
+ */
+export interface TransactionRegisterFilter {
+  page: number;
+  direction: TransactionDirectionFilter;
+  /** Taxonomy value, `'unclassified'`, or `'all'`. */
+  primaryCategory?: string;
+  /** `accounts.id` or `'all'`. */
+  accountId?: string;
+  /** Free-text merchant/description search. */
+  search?: string;
+}
+
+export interface AccountOption {
+  id: string;
+  label: string;
+}
+
 export type DashboardRange = 'ytd' | '12mo' | 'all' | 'custom';
 
 export interface LeakageTransaction {
