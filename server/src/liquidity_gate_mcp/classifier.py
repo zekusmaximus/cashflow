@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .database import DatabaseManager
+from .database import DatabaseManager, stamp_override_flags
 from .models import (
     ApplyClassifierRequest,
     ApplyClassifierResult,
@@ -70,6 +70,18 @@ def apply_classifier(
             )
 
         compiled = [(rule, re.compile(rule.pattern, re.IGNORECASE)) for rule in rules]
+
+        # Self-protection: before a reclassify_all pass, stamp every transaction
+        # that matches a stored override tuple so the per-row skip below cannot
+        # miss one. This makes apply_classifier durable regardless of whether any
+        # external backfill (TS bootstrap, sidecar re-apply) ever ran, closing the
+        # MCP-direct hole — a direct apply_classifier(reclassify_all=True) is now
+        # safe no matter who invokes it. Idempotent and tuple-matched. Skipped on
+        # dry runs, which must not write; the commit makes the stamp visible to
+        # the fetch below in the same connection.
+        if request.reclassify_all and not request.dry_run:
+            stamp_override_flags(conn)
+            conn.commit()
 
         # Build fetch query
         conditions = []
