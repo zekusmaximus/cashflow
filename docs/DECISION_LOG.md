@@ -7,6 +7,99 @@ here's why we won't revisit that for a while" calls.
 
 ---
 
+## 2026-06-01 — Classification-first UI (Classify view, register filters/search/bulk, taxonomy fixes)
+
+**Context.** The desktop app booted into Source Intake, and the only
+classification surface — the Transaction Register — was the last section
+of the Cash Flow tab. The user's primary day-to-day task (re-bucketing
+transactions) required switching tabs and scrolling past seven analytics
+sections every session. The register filtered on direction only; there
+was no way to isolate a category, account, or merchant.
+
+**Decision.** Made classification a first-class surface.
+
+- Added a third `AppView` value `'classify'` (`app-shell.tsx`), set as the
+  **default** view in `App.tsx`, with a `⌘3` shortcut + palette entry. The
+  register was extracted to `src/features/register/register-view.tsx` and
+  renders full-height as a standalone Classify view.
+- `getTransactionPage` gained `primaryCategory`, `accountId`, and `search`
+  filters (all bound parameters; the controlled `direction` union stays
+  inline; transfer-exclusion preserved). Added a header unclassified-count
+  pill that deep-links into the filtered Classify view.
+- Bulk select + "apply to all matching" issue one `upsertTransactionOverride`
+  per row through a lifted mutation.
+- Taxonomy fixes in the editor: added `business_expense` (33 existing rows
+  carried it but the dropdown couldn't produce it), removed `unclassified`
+  as a save target (state, not destination), and added a `lifecycle`
+  control wired through the existing override column.
+
+**Alternatives considered.**
+
+- *Float the register to the top of the Cash Flow tab instead of a separate
+  view.* Rejected. The analytics and the classification queue are different
+  jobs at different cadences; sharing one scroll column is what created the
+  problem. A dedicated default view is the fix.
+- *Leave `unclassified` in the dropdown.* Rejected. It is a state, not a
+  classification target; offering it invited saving rows back into limbo.
+
+---
+
+## 2026-06-01 — UI rule capture via Python classifier sidecar; manual-rule priority band; override-stamp fix
+
+**Context.** The UI could write per-row overrides but not durable
+`classification_rules`, and could not run the classifier (Python, in the
+MCP server) — so a captured rule could never re-bucket existing rows or be
+applied without leaving the app. We wanted rule capture from a register row
+without forking the matcher into a second engine.
+
+**Decision.** Route rule application through the *same* Python classifier
+via a sidecar, never a reimplementation.
+
+- New Python CLI entry `cli_classify.py` (registered as `apply-classifier`
+  in `pyproject.toml`, mirroring the `refresh-hysa-gate` precedent): upserts
+  the rule, runs `apply_classifier(reclassify_all=True)`, then re-applies
+  stored overrides; emits a JSON result. A Rust Tauri command
+  (`apply_classification_rule`) spawns it replicating `.mcp.json` exactly
+  (venv interpreter, `cwd=server`, `LIQUIDITY_GATE_ROOT=..`), overridable via
+  `LIQUIDITY_GATE_PYTHON`.
+- The frontend's live "matches N" preview uses `new RegExp(pattern,'i')`
+  against `description_raw` — byte-for-byte the engine's matching semantics
+  (case-insensitive `re.search` on `description_raw`), so the preview and the
+  authoritative run agree. The TS regex is preview-only; Python is the sole
+  source of truth for writes.
+- **Manual-rule priority band: 6–9 (default 8).** Below the structural
+  transfer-protection rules (priority 5, inviolable) and above general rules
+  (10+). Lower number wins. The UI clamps captured rules to ≥6 so a manual
+  merchant rule can never preempt transfer protection, and defaults
+  `direction_filter` to the source row's direction (never `transfer`).
+- **`manual_override_applied` stamp fix.** `upsertTransactionOverride` now
+  stamps `metadata_json.manual_override_applied = true` (via `json_set`), the
+  exact flag the classifier's `reclassify_all` checks before skipping a row.
+  A bootstrap backfill stamps pre-existing overrides. Without this, the first
+  reclassify run would overwrite every manual override. (See PROJECT_STATUS
+  "Known issues" — the backfill's first cut missed 20 rows; tracked there.)
+
+**Why `reclassify_all=True` on capture.** Manual rules must win over the
+classifier's prior *general* guesses on already-classified rows; the default
+classifier scope only touches `unclassified` rows. `reclassify_all` is safe
+*only because* manual overrides are protected by the flag above.
+
+**Alternatives considered.**
+
+- *Port the matcher to Rust, or re-implement it in TS for the UI.* Rejected.
+  Two engines drift; the regex/first-match/priority semantics would diverge
+  the moment either side changed. One Python engine, invoked as a sidecar, is
+  the only way to guarantee the UI and the MCP classify identically.
+- *Write the rule row from TS and let the next MCP ingest apply it.* Rejected
+  as the sole mechanism. It leaves existing matching rows stale until an
+  unrelated ingest and pulls the user out of the app to finish a task.
+- *Server-side preview (dry-run) for the match count.* Deferred. A debounced
+  `dry_run=True` sidecar call would make the preview authoritative across the
+  full dataset; the current local regex preview undercounts when the view is
+  filtered/paginated. Acceptable for v1; noted as a refinement.
+
+---
+
 ## 2026-05-27 — Retirement of `subcategory = 'rental_mortgage'`
 
 **Context.** The rental property mortgage (M & T Mortgage, $1,024.14 on
