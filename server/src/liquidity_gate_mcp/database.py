@@ -51,6 +51,43 @@ def merge_manual_override_metadata(metadata: dict[str, Any], note: str) -> dict[
     return merged
 
 
+# Set-based stamp of ``metadata_json.manual_override_applied`` on every
+# transaction that matches a stored override tuple. Matched on the authoritative
+# ``(account_id, occurred_on, amount, description_raw)`` columns of
+# ``transaction_overrides`` — never the derived SHA-256 ``match_key``, whose
+# description-normalization drift is exactly what made the original backfill miss
+# rows. The trailing flag check makes re-runs no-ops (idempotent).
+STAMP_OVERRIDE_FLAGS_SQL = """
+UPDATE transactions
+SET metadata_json = json_set(
+      COALESCE(metadata_json, '{}'),
+      '$.manual_override_applied', json('true'))
+WHERE EXISTS (
+  SELECT 1 FROM transaction_overrides o
+  WHERE o.account_id      = transactions.account_id
+    AND o.occurred_on     = transactions.occurred_on
+    AND o.amount          = transactions.amount
+    AND o.description_raw = transactions.description_raw
+)
+AND COALESCE(
+      json_extract(metadata_json, '$.manual_override_applied'),
+      0) NOT IN (1, 'true')
+"""
+
+
+def stamp_override_flags(conn: sqlite3.Connection) -> int:
+    """Stamp ``manual_override_applied`` on every override-governed transaction.
+
+    Flags every transaction whose ``(account_id, occurred_on, amount,
+    description_raw)`` tuple matches a ``transaction_overrides`` row, so the
+    ``reclassify_all`` skip logic protects it. Operates on the supplied
+    connection *without committing* — the caller owns the transaction, letting
+    this run inside the same unit of work as a classify pass. Idempotent and
+    tuple-matched. Returns the number of rows newly stamped.
+    """
+    return conn.execute(STAMP_OVERRIDE_FLAGS_SQL).rowcount
+
+
 class DatabaseManager:
     def __init__(self, database_path: Path, schema_path: Path) -> None:
         self.database_path = database_path

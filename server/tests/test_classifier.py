@@ -292,6 +292,81 @@ def test_reclassify_all_skips_manual_overrides(database: DatabaseManager) -> Non
     assert tx["primary_category"] == "manual_category"  # untouched
 
 
+def test_reclassify_all_protects_override_without_preset_flag(
+    database: DatabaseManager,
+) -> None:
+    """Regression for the 20-row backfill gap / MCP-direct hole.
+
+    Reproduces the pre-fix state: a ``transaction_overrides`` row exists but the
+    transaction was never stamped with ``manual_override_applied`` (e.g. the
+    original backfill missed it, or the override predates flag-stamping). A
+    direct ``apply_classifier(reclassify_all=True)`` must self-stamp from the
+    override *tuple* and skip the row, so the manual value survives a conflicting
+    rule. This fails before the engine-level self-protection and passes after.
+    """
+    import json
+
+    _insert_transaction(
+        database,
+        description_raw="AMAZON.COM*123ABC",
+        direction="outflow",
+        amount=-50.0,
+        primary_category="business_expense",  # the manual override value
+    )
+
+    # Store the override directly and seed the transaction with the override's
+    # values, but WITHOUT stamping the transaction flag — exactly the unprotected
+    # state the live audit found (override applied earlier, flag never written /
+    # backfill missed it). The match_key is deliberately arbitrary to prove
+    # protection keys off the tuple columns, not the SHA-256 match_key.
+    with database.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO transaction_overrides
+              (id, match_key, account_id, occurred_on, amount, description_raw,
+               primary_category, subcategory, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "ovr-1",
+                "arbitrary-match-key",
+                "acct-chase-credit",
+                "2026-01-15",
+                -50.0,
+                "AMAZON.COM*123ABC",
+                "business_expense",
+                "software",
+                "kept for taxes",
+            ),
+        )
+        conn.execute(
+            "UPDATE transactions SET subcategory = 'software' WHERE id = 'tx-001'"
+        )
+        conn.commit()
+
+    # A conflicting rule that would otherwise re-bucket the row.
+    upsert_classification_rule(
+        database,
+        UpsertClassificationRuleRequest(
+            id="rule-amazon-conflict",
+            pattern=r"(?i)\bamazon\b",
+            primary_category="variable_lifestyle",
+            subcategory="amazon",
+            priority=1,
+        ),
+    )
+
+    apply_classifier(database, ApplyClassifierRequest(reclassify_all=True))
+
+    tx = _fetch_transaction(database, "tx-001")
+    # The manual override value survived the conflicting rule.
+    assert tx["primary_category"] == "business_expense"
+    assert tx["subcategory"] == "software"
+    # ...and the engine stamped the protection flag from the override tuple.
+    meta = json.loads(tx["metadata_json"])
+    assert meta.get("manual_override_applied") is True
+
+
 # ---------------------------------------------------------------------------
 # apply_classifier — account_filter
 # ---------------------------------------------------------------------------
