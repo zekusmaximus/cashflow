@@ -5,7 +5,7 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-05-27 (data-quality pass landed: check register + mobile-deposit ledger ingestion, lifecycle audit tool, annual household reference TOML, subcategory taxonomy additions — 17 MCP tools total)
+**Last updated:** 2026-06-01 (classification-first UI shipped: default Classify view, register category/account/search filters + unclassified-count pill, bulk apply, `business_expense`/`lifecycle` editor fixes; UI rule capture via Python classifier sidecar with manual-rule priority band 6–9 and the `manual_override_applied` stamp fix. Stress-test caveat: override-protection backfill missed 20 rows — see Known issues.)
 
 ## Snapshot
 
@@ -400,6 +400,19 @@ normal use of the repo for transaction-based spending analysis.
 
 ## Known issues and loose ends
 
+- [ ] **Override-protection backfill missed 20 rows (2026-06-01).** The
+  `manual_override_applied` stamp + bootstrap backfill shipped with the rule-capture
+  batch, but a live audit found **167 of 187** override-governed transactions flagged
+  — 20 are unprotected. Several of the 20 also match a rule (e.g. the two Zara refunds
+  vs. `rule-zara`, four `rule-refund-inflow` rows), so a **direct** `apply_classifier(reclassify_all=true)`
+  via MCP would overwrite those overrides (the Zara refunds would flip from
+  `income/refund` back to `variable_lifestyle/clothing`). The new UI **sidecar** path is
+  safe — it re-applies overrides after classifying — but the documented "run reclassify_all
+  via MCP" workflow is not. **Do not run a direct MCP `reclassify_all` until the backfill is
+  repaired.** Fix: make the bootstrap backfill stamp all 187 tuple-matching rows, and make the
+  live `upsertTransactionOverride` stamp every transaction matching the override tuple (not just
+  the clicked `id`). The protection *mechanism* is verified working — the 167 flagged rows are
+  correctly skipped in a dry-run; only coverage is short.
 - [ ] **Chase same-day dedup backfill.** Fixed in code: a backwards-compatible `|seqN` suffix now disambiguates duplicate (date, amount, description) rows within a file, while the first occurrence keeps the legacy hash so already-ingested rows still match on re-import. The 12 collapsed rows from the original Chase ingest remain absent in the DB; they'll appear automatically next time the Chase CSV is re-exported and re-ingested. No data backfill needed otherwise.
 - [x] **Untagged transfer patterns from Beacon parser** — FID BKG SVC LLC MONEYLINE, VENMO PAYMENT, and MOBILE CHECK DEP are now covered by classifier rules added in the second pass.
 - [x] **Watch-root Cowork project isolation resolved.** `C:\Users\Jeff\Documents\Cashflow\.claudecowork` is now a junction to the repo `.claudecowork\` directory — `agent.md`, `config.json`, and `mcp-server.json` are shared automatically. No manual mirroring needed.
