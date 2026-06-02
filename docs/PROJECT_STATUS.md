@@ -400,19 +400,19 @@ normal use of the repo for transaction-based spending analysis.
 
 ## Known issues and loose ends
 
-- [ ] **Override-protection backfill missed 20 rows (2026-06-01).** The
-  `manual_override_applied` stamp + bootstrap backfill shipped with the rule-capture
-  batch, but a live audit found **167 of 187** override-governed transactions flagged
-  — 20 are unprotected. Several of the 20 also match a rule (e.g. the two Zara refunds
-  vs. `rule-zara`, four `rule-refund-inflow` rows), so a **direct** `apply_classifier(reclassify_all=true)`
-  via MCP would overwrite those overrides (the Zara refunds would flip from
-  `income/refund` back to `variable_lifestyle/clothing`). The new UI **sidecar** path is
-  safe — it re-applies overrides after classifying — but the documented "run reclassify_all
-  via MCP" workflow is not. **Do not run a direct MCP `reclassify_all` until the backfill is
-  repaired.** Fix: make the bootstrap backfill stamp all 187 tuple-matching rows, and make the
-  live `upsertTransactionOverride` stamp every transaction matching the override tuple (not just
-  the clicked `id`). The protection *mechanism* is verified working — the 167 flagged rows are
-  correctly skipped in a dry-run; only coverage is short.
+- [x] **Override-protection backfill gap — RESOLVED 2026-06-02.** A live audit found the
+  original `manual_override_applied` backfill matched on the derived SHA-256 `match_key`
+  (whose description-normalization drifts) and missed 20 of 187 override-governed rows, leaving
+  them exposed to a direct MCP `apply_classifier(reclassify_all=true)` (the two Zara refunds
+  would have flipped `income/refund` → `variable_lifestyle/clothing`). Fixed three ways:
+  (1) `apply_classifier` now self-protects — `stamp_override_flags` (tuple match on
+  `account_id, occurred_on, amount, description_raw`, never the match_key) runs before any
+  `reclassify_all` pass, so the MCP-direct path is safe regardless of invoker; (2)
+  `upsertTransactionOverride` stamps the flag on all tuple-matching rows at write time;
+  (3) one-time migration `scripts/migrations/2026-06-02_backfill_override_flags.py` brought the
+  existing DB to **187/187, 0 unprotected** (verified on the live DB). A regression test
+  (`test_reclassify_all_protects_override_without_preset_flag`) now reproduces the missing-flag
+  case. The TS bootstrap backfill was removed (one source of truth).
 - [ ] **Chase same-day dedup backfill.** Fixed in code: a backwards-compatible `|seqN` suffix now disambiguates duplicate (date, amount, description) rows within a file, while the first occurrence keeps the legacy hash so already-ingested rows still match on re-import. The 12 collapsed rows from the original Chase ingest remain absent in the DB; they'll appear automatically next time the Chase CSV is re-exported and re-ingested. No data backfill needed otherwise.
 - [x] **Untagged transfer patterns from Beacon parser** — FID BKG SVC LLC MONEYLINE, VENMO PAYMENT, and MOBILE CHECK DEP are now covered by classifier rules added in the second pass.
 - [x] **Watch-root Cowork project isolation resolved.** `C:\Users\Jeff\Documents\Cashflow\.claudecowork` is now a junction to the repo `.claudecowork\` directory — `agent.md`, `config.json`, and `mcp-server.json` are shared automatically. No manual mirroring needed.
