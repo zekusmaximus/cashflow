@@ -27,7 +27,6 @@ interface SqlDatabase {
 
 let databasePromise: Promise<SqlDatabase | null> | null = null;
 let schemaPromise: Promise<string> | null = null;
-let backfillPromise: Promise<void> | null = null;
 
 const schemaAssetUrl = new URL('../../server/sql/schema.sql', import.meta.url).href;
 
@@ -222,17 +221,13 @@ export async function bootstrapLocalDatabase(): Promise<void> {
     await database.execute(statement);
   }
 
-  // One-time (per session) backfill so pre-existing manual overrides are
-  // protected from reclassify_all before any rule-apply run can reach them.
-  if (!backfillPromise) {
-    backfillPromise = backfillManualOverrideFlags(database).catch((err) => {
-      // Non-fatal: a failed backfill must not block the app from booting.
-      // Reset so a later bootstrap can retry.
-      backfillPromise = null;
-      console.error('manual_override_applied backfill failed', err);
-    });
-  }
-  await backfillPromise;
+  // No manual-override backfill here by design. Override protection is now
+  // owned end-to-end by Python: apply_classifier(reclassify_all=True) stamps
+  // every override-tuple-matching row before it reclassifies (engine-level
+  // self-protection), upsertTransactionOverride stamps at write time, and the
+  // sidecar re-applies overrides after each classify. Keeping a second stamping
+  // path here would split the source of truth. The existing real DB is brought
+  // to 187/187 by scripts/migrations/2026-06-02_backfill_override_flags.py.
 }
 
 export async function seedDemoLiquidityGates(): Promise<void> {
@@ -766,11 +761,15 @@ export async function upsertTransactionOverride(
     ],
   );
 
-  // Apply the stored override back to any matching transactions.
+  // Apply the stored override back to EVERY transaction matching the override
+  // tuple — not just the clicked id. The override is meant to apply to every
+  // logical match (the "survives re-import" contract; the Python check-register
+  // path already fans out this way), and any tuple-sibling must carry the flag.
   // Only non-null fields from the override replace transaction values.
   // Critically, also stamp metadata_json.manual_override_applied = true: the
   // Python classifier's reclassify_all protection keys off exactly this flag,
   // so without it the first rule-apply run would overwrite this manual edit.
+  // Matched on the authoritative tuple columns, never the derived match_key.
   await database.execute(
     `UPDATE transactions
         SET merchant_normalized = COALESCE(
@@ -791,37 +790,11 @@ export async function upsertTransactionOverride(
             metadata_json       = json_set(
               COALESCE(metadata_json, '{}'),
               '$.manual_override_applied', json('true'))
-      WHERE id = $2`,
-    [matchKey, params.transactionId],
-  );
-}
-
-/**
- * One-time backfill: stamp `metadata_json.manual_override_applied = true` on
- * every transaction that already has a stored override, so pre-existing manual
- * edits are protected before the first `apply_classifier(reclassify_all=True)`
- * run. The override row copies `description_raw` verbatim from the transaction
- * at creation, so we can match on (account_id, occurred_on, amount,
- * description_raw) — the same identity tuple behind the SHA-256 match_key —
- * without recomputing the hash here. Idempotent: rows already stamped are
- * skipped, so it is safe to run on every bootstrap.
- */
-async function backfillManualOverrideFlags(database: SqlDatabase): Promise<void> {
-  await database.execute(
-    `UPDATE transactions
-        SET metadata_json = json_set(
-              COALESCE(metadata_json, '{}'),
-              '$.manual_override_applied', json('true'))
-      WHERE EXISTS (
-              SELECT 1 FROM transaction_overrides o
-               WHERE o.account_id      = transactions.account_id
-                 AND o.occurred_on     = transactions.occurred_on
-                 AND o.amount          = transactions.amount
-                 AND o.description_raw = transactions.description_raw
-            )
-        AND COALESCE(
-              json_extract(metadata_json, '$.manual_override_applied'),
-              0) NOT IN (1, 'true')`,
+      WHERE account_id = $2
+        AND occurred_on = $3
+        AND amount = $4
+        AND description_raw = $5`,
+    [matchKey, params.accountId, params.occurredOn, params.amount, params.descriptionRaw],
   );
 }
 
