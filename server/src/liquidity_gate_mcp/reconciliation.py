@@ -249,7 +249,7 @@ def reconcile_periods(
                     if prior_closing is not None:
                         running_opening = prior_closing
             for period_start, period_end in months:
-                summary = _compute_period(
+                month_summaries = _compute_month_periods(
                     connection,
                     account=account,
                     period_start=period_start,
@@ -259,16 +259,30 @@ def reconcile_periods(
                     has_running_balance=has_running_balance,
                     today=today,
                 )
-                _upsert(connection, summary)
-                # Roll forward: prefer statement, fall back to computed.
-                # Both can be None when a seed is missing — the next
-                # month then also opens with None.
-                running_opening = (
-                    summary.statement_closing_balance
-                    if summary.statement_closing_balance is not None
-                    else summary.computed_closing_balance
+                # A mid-month checkpoint splits the month into a verify period
+                # [period_start, D] and a remainder [D+1, period_end]. The single
+                # full-month row is then superseded and must not linger — a
+                # pre-split run may have written one and the UPSERT below never
+                # removes it (the keys differ). See Defect 1.
+                is_split = not (
+                    len(month_summaries) == 1
+                    and month_summaries[0].period_start == period_start.isoformat()
+                    and month_summaries[0].period_end == period_end.isoformat()
                 )
-                summaries.append(summary)
+                if is_split:
+                    _delete_period(connection, account.id, period_start, period_end)
+                for summary in month_summaries:
+                    _upsert(connection, summary)
+                    summaries.append(summary)
+                # Roll forward from the LAST sub-period: prefer statement, fall
+                # back to computed. Both can be None when a seed is missing — the
+                # next month then also opens with None.
+                last = month_summaries[-1]
+                running_opening = (
+                    last.statement_closing_balance
+                    if last.statement_closing_balance is not None
+                    else last.computed_closing_balance
+                )
 
         connection.commit()
     except Exception:
@@ -337,6 +351,129 @@ def _months_in_range(start: date, end: date) -> list[tuple[date, date]]:
     return months
 
 
+def _compute_month_periods(
+    connection: sqlite3.Connection,
+    *,
+    account: _Account,
+    period_start: date,
+    period_end: date,
+    opening: float | None,
+    entry: AccountBalances,
+    has_running_balance: bool,
+    today: date,
+) -> list[ReconciliationPeriodSummary]:
+    """Reconciliation period(s) for one calendar month.
+
+    Normally a single period spanning the whole month. A checkpoint — a dated
+    ``[statement_closings.<account>]`` entry for a checkpoint-eligible cash
+    account (no CSV running balance, not a credit card) — changes that:
+
+    * ``D`` strictly inside the month (``period_start < D < period_end``): the
+      month is SPLIT. A verify period ``[period_start, D]`` carries the
+      checkpoint balance ``X`` as its closing (``source='checkpoint'``) and
+      reports the verification delta against the chain; a remainder
+      ``[D+1, period_end]`` re-anchors its opening to ``X`` and chains to
+      month-end with a NULL closing (unless a month-end statement / running
+      balance supplies one). The checkpoint never pins the full month's
+      closing — that spurious month-end variance was Defect 1.
+    * ``D == period_end`` (clean month-end checkpoint): no split; the single
+      period takes ``X`` as its closing.
+    * ``D == period_start`` (checkpoint on the 1st): the verify period would be
+      zero-length, so it is skipped; ``X`` becomes the month's opening anchor
+      and a single remainder ``[D+1, period_end]`` chains forward from ``X``.
+
+    Defect 2 — single source of truth: a checkpoint entry materialises as
+    exactly ONE row, the ``[period_start, D]`` period stamped
+    ``source='checkpoint'`` here. ``seed_balance_anchors`` keys its bootstrap
+    anchor for the same entry to ``[first-of-month, D]`` — identical to this
+    verify period's key — so the two never produce two overlapping rows. This
+    reconcile pass owns the final row: it runs after seeding and its UPSERT
+    wins, re-stamping the row ``'checkpoint'``. The generic ``statement_closings``
+    reader therefore leaves no separate ``balances_toml`` row behind for a
+    checkpoint entry.
+    """
+    is_checkpoint_account = (
+        not has_running_balance and account.account_type != "credit_card"
+    )
+    if is_checkpoint_account:
+        checkpoint_dates = sorted(
+            d for d in entry.statement_closings if period_start <= d <= period_end
+        )
+        if checkpoint_dates:
+            governing = checkpoint_dates[-1]
+            if governing >= period_end:
+                # Clean month-end checkpoint: collapses to a single period whose
+                # closing is X (no zero-length remainder to split off).
+                return [
+                    _compute_checkpoint_period(
+                        connection,
+                        account=account,
+                        period_start=period_start,
+                        period_end=period_end,
+                        opening=opening,
+                        entry=entry,
+                        checkpoint_dates=checkpoint_dates,
+                        today=today,
+                    )
+                ]
+            if governing <= period_start:
+                # Checkpoint on the first of the month: the verify period would
+                # be degenerate. Treat X as the opening anchor and emit only the
+                # remainder, which chains forward from D+1 (everything on/before
+                # D is already inside X).
+                anchor = round(float(entry.statement_closings[governing]), 2)
+                return [
+                    _compute_period(
+                        connection,
+                        account=account,
+                        period_start=_next_day(governing),
+                        period_end=period_end,
+                        opening=anchor,
+                        entry=entry,
+                        has_running_balance=has_running_balance,
+                        today=today,
+                    )
+                ]
+            # Strictly mid-month: split into a verify period and a remainder.
+            verify = _compute_checkpoint_period(
+                connection,
+                account=account,
+                period_start=period_start,
+                period_end=governing,
+                opening=opening,
+                entry=entry,
+                checkpoint_dates=checkpoint_dates,
+                today=today,
+            )
+            remainder = _compute_period(
+                connection,
+                account=account,
+                period_start=_next_day(governing),
+                period_end=period_end,
+                # Re-anchor: the remainder opens at the checkpoint balance X
+                # (== verify's closing, since net after D within the verify
+                # period is empty), NOT the unanchored chain.
+                opening=verify.statement_closing_balance,
+                entry=entry,
+                has_running_balance=has_running_balance,
+                today=today,
+            )
+            return [verify, remainder]
+
+    return [
+        _compute_period(
+            connection,
+            account=account,
+            period_start=period_start,
+            period_end=period_end,
+            opening=opening,
+            entry=entry,
+            has_running_balance=has_running_balance,
+            today=today,
+        )
+    ]
+
+
 def _compute_period(
     connection: sqlite3.Connection,
     *,
@@ -348,26 +485,14 @@ def _compute_period(
     has_running_balance: bool,
     today: date,
 ) -> ReconciliationPeriodSummary:
-    # Checkpoint path: a cash account with no running balance and an explicit
-    # dated entry inside this period. The entry asserts a true end-of-day
-    # balance at its date; it is consumed with mid-month semantics rather than
-    # treated as a plain month-end statement closing.
-    if not has_running_balance and account.account_type != "credit_card":
-        checkpoint_dates = sorted(
-            d for d in entry.statement_closings if period_start <= d <= period_end
-        )
-        if checkpoint_dates:
-            return _compute_checkpoint_period(
-                connection,
-                account=account,
-                period_start=period_start,
-                period_end=period_end,
-                opening=opening,
-                entry=entry,
-                checkpoint_dates=checkpoint_dates,
-                today=today,
-            )
+    """Compute one normal (non-checkpoint) reconciliation period.
 
+    Checkpoint routing lives in :func:`_compute_month_periods`; by the time a
+    range reaches here it carries no governing checkpoint (a split remainder
+    spans strictly after the latest checkpoint, and non-checkpoint accounts
+    never had one), so this path treats any ``[statement_closings]`` entry at
+    ``period_end`` as a plain month-end statement closing.
+    """
     breakdown = _breakdown(connection, account.id, period_start, period_end)
 
     computed_closing: float | None
@@ -847,6 +972,28 @@ def _existing_explanation(
         (account_id, period_start.isoformat(), period_end.isoformat()),
     ).fetchone()
     return row["variance_explanation"] if row else ""
+
+
+def _delete_period(
+    connection: sqlite3.Connection,
+    account_id: str,
+    period_start: date,
+    period_end: date,
+) -> None:
+    """Drop a stored full-month row superseded by a checkpoint split.
+
+    The mid-month split replaces the single ``[period_start, period_end]``
+    period with ``[period_start, D]`` + ``[D+1, period_end]``. A pre-split run
+    may have written the full-month row, and the keyed UPSERT never removes it
+    (the keys differ), so it is dropped here to keep the materialised periods
+    consistent — no full-month row carrying a checkpoint-pinned closing. See
+    Defect 1. A no-op (0 rows) on a fresh chain.
+    """
+    connection.execute(
+        "DELETE FROM reconciliation_periods "
+        "WHERE account_id = ? AND period_start = ? AND period_end = ?",
+        (account_id, period_start.isoformat(), period_end.isoformat()),
+    )
 
 
 def _upsert(

@@ -269,15 +269,79 @@ def _write_checkpoint_entry(
     # Two-decimal float, preserved verbatim by tomlkit (it keeps the literal
     # token rather than re-rendering the Python float).
     value = tomlkit.parse(f"x = {float(balance):.2f}")["x"]
-    # Quoted/basic-string key (e.g. "2026-06-02"), matching existing entries.
-    key = SingleKey(as_of.isoformat(), t=KeyType.Basic)
-    section[key] = value
     clean_note = note.lstrip("#").strip().replace("\n", " ").replace("\r", " ")
     if clean_note:
-        section[key].comment(clean_note)
+        value.comment(clean_note)
+    # Quoted/basic-string key (e.g. "2026-06-02"), matching existing entries.
+    key = SingleKey(as_of.isoformat(), t=KeyType.Basic)
+    _insert_in_order(section, key=key, value=value, as_of=as_of, note=clean_note)
 
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")
     return path
+
+
+def _insert_in_order(section, *, key, value, as_of: date, note: str) -> None:
+    """Place ``"<date>" = <balance>`` in the table at a human-auditable spot.
+
+    ``tomlkit`` attributes a trailing comment block to the *preceding* (often
+    empty) table, so a plain ``section[key] = value`` appends the new entry
+    *below* those comments — orphaning it just above the next section's header
+    and making the next section's descriptive comments read as if they belong
+    to this entry (Defect 3). Instead:
+
+    * Overwrite in place when the date already exists (preserve its position).
+    * Otherwise insert among existing dated entries in date order, before any
+      trailing comments tomlkit has mis-attributed to this table.
+    * For an empty table, drop the entry directly under the header (body index
+      0) and keep a blank line before any trailing comment block so that block
+      stays visually attached to the following section.
+    """
+    from tomlkit.items import Whitespace
+
+    key_str = as_of.isoformat()
+    if key_str in section:
+        # Same date already present — overwrite value + comment, keep position.
+        section[key] = value
+        if note:
+            section[key].comment(note)
+        return
+
+    container = section.value
+    body = container.body
+    keyed = [(idx, k) for idx, (k, _item) in enumerate(body) if k is not None]
+    # A normal one-line entry terminates its own line; tomlkit does not add the
+    # newline for a body-level insert, so set it explicitly.
+    value.trivia.trail = "\n"
+
+    if keyed:
+        before_idx = None
+        for idx, k in keyed:
+            try:
+                existing_date = date.fromisoformat(k.key)
+            except ValueError:
+                continue
+            if as_of < existing_date:
+                before_idx = idx
+                break
+        if before_idx is not None:
+            container._insert_at(before_idx, key, value)
+        else:
+            # Later than every existing entry: append right after the last dated
+            # entry (before any trailing comment that belongs to a later table).
+            container._insert_after(keyed[-1][1], key, value)
+        return
+
+    if not body:
+        # Truly empty table: a plain add lands directly under the header.
+        section[key] = value
+        return
+
+    # Empty table whose body is only trailing trivia (whitespace/comments that
+    # actually document the *following* section). Put the entry at the top and
+    # keep a blank line before that trivia.
+    if not isinstance(body[0][1], Whitespace):
+        value.trivia.trail = "\n\n"
+    container._insert_at(0, key, value)
 
 
 def _run_end(today: date, checkpoint_date: date) -> date:
