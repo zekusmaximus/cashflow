@@ -93,6 +93,16 @@ def seed_balance_anchors(database: DatabaseManager, balances: BalancesConfig) ->
                 closing=entry.opening_balance,
                 source=OPENING_SOURCE if entry.opening_balance is not None else None,
             )
+            # Defect 2 — single source of truth for a checkpoint entry. This
+            # bootstrap anchor is keyed [first-of-month, period_end]. For a
+            # checkpoint (a cash account with no CSV running balance) the
+            # reconcile pass materialises its verify period at the SAME key
+            # ([period_start, D]) and re-stamps it source='checkpoint', so the
+            # two never become two overlapping rows — reconcile owns the final
+            # row. This seed only bootstraps the row so v_computed_balance / the
+            # gate can anchor on a freshly added entry before a full reconcile
+            # runs; it never produces a second, separately-keyed balances_toml
+            # row for the same entry.
             for period_end, closing in entry.statement_closings.items():
                 period_start = period_end.replace(day=1)
                 seeded += _insert_anchor(
