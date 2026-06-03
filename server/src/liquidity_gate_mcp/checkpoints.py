@@ -29,9 +29,6 @@ from datetime import date
 from pathlib import Path
 import sqlite3
 
-import tomlkit
-from tomlkit.items import KeyType, SingleKey
-
 from .balances import load_balances
 from .computed_balance import (
     ALLY_HYSA_ACCOUNT_ID,
@@ -229,6 +226,19 @@ def _write_checkpoint_entry(
     human comments survive untouched. Balances are written with two decimals
     (e.g. ``35000.00``) to match the existing entries.
     """
+    # Imported lazily so a missing optional dependency degrades to "this one
+    # tool errors" instead of bricking the whole MCP server at startup.
+    try:
+        import tomlkit
+        from tomlkit.items import KeyType, SingleKey
+    except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
+        raise CheckpointError(
+            "upsert_balance_checkpoint requires the 'tomlkit' package "
+            "(comment-preserving TOML writes). Install it into the server's "
+            "Python environment, e.g. `pip install -e .` from the server/ "
+            "directory, then restart the server."
+        ) from exc
+
     path = watch_root / "balances.toml"
     if path.exists():
         doc = tomlkit.parse(path.read_text(encoding="utf-8"))
