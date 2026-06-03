@@ -314,6 +314,13 @@ class ReconciliationPeriodSummary(BaseModel):
     computed_closing_balance: float | None
     variance_amount: float | None
     variance_explanation: str = ""
+    # Per-account checkpoint staleness. None for periods/accounts that do not
+    # consume an explicit balance checkpoint; True/False on a 'checkpoint'
+    # period to flag whether the governing checkpoint is stale (its date is
+    # before the newest ingested transaction for the account, or it is more
+    # than 35 days old). Additive, optional field — existing consumers ignore
+    # it.
+    checkpoint_stale: bool | None = None
 
 
 class ReconcilePeriodsResult(BaseModel):
@@ -326,6 +333,67 @@ class ReconcilePeriodsResult(BaseModel):
     accounts_processed: int
     periods_written: int
     summaries: list[ReconciliationPeriodSummary] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Balance checkpoints
+# ---------------------------------------------------------------------------
+
+
+class UpsertBalanceCheckpointRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Exact accounts.id OR a case-insensitive institution alias (ally, chase,
+    # beacon, webster) — resolved with the same order balances.toml uses.
+    account: str
+    # As-of date of the observed balance.
+    date: date
+    # True end-of-day balance at ``date``.
+    balance: float
+    # Free text stored as a TOML inline comment on the written entry.
+    note: str = ""
+
+    @field_validator("account", mode="before")
+    @classmethod
+    def strip_account(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        return str(value).strip()
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def strip_note(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+
+class UpsertBalanceCheckpointResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Resolved account + where the entry was written.
+    account_id: str
+    account_section: str
+    account_type: str
+    balances_file_path: str
+    # The written checkpoint entry.
+    written_date: str
+    written_balance: float
+    written_note: str = ""
+    # Gate refresh (Ally only; null fields for other accounts).
+    gate_updated: bool = False
+    gate_anchor_date: str | None = None
+    gate_computed_balance: float | None = None
+    # Post-reconcile state for the period that consumed the checkpoint.
+    checkpoint_period_start: str | None = None
+    checkpoint_period_end: str | None = None
+    statement_closing_balance: float | None = None
+    computed_closing_balance: float | None = None
+    variance_amount: float | None = None
+    # The re-anchored figure carried into the next period's opening.
+    next_period_opening_balance: float | None = None
+    # Staleness of the governing checkpoint (Deliverable 3).
+    checkpoint_stale: bool | None = None
 
 
 # ---------------------------------------------------------------------------
