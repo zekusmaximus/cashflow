@@ -1,7 +1,14 @@
 import { parseCsv } from '../../lib/csv';
 import { isTauriRuntime } from '../../lib/tauri';
 import { MATCH_THRESHOLD, scoreCandidate, type CandidateFile, type ScoringRow } from './matcher';
-import type { ChecklistDataset, ChecklistItem, MatchedFile, WatchRootStatus } from './types';
+import type {
+  ChecklistDataset,
+  ChecklistItem,
+  ChecklistScope,
+  ChecklistStatus,
+  MatchedFile,
+  WatchRootStatus,
+} from './types';
 
 export function parseObtainedFlag(value: string): boolean {
   const normalized = value.trim().toLowerCase();
@@ -16,6 +23,84 @@ export function parseObtainedFlag(value: string): boolean {
 export function deriveCategoryId(category: string): string {
   const match = category.match(/^([A-Za-z])\.\s/);
   return match ? match[1].toUpperCase() : category.trim();
+}
+
+/**
+ * Applies the 2026-06-03 coverage-review dispositions to a checklist row.
+ *
+ * The intake checklist began as a "gather everything" template. A live
+ * classification-coverage session confirmed that most listed sources are either
+ * already covered by the transaction feed at high confidence (Amazon, Instacart,
+ * subscriptions, utilities, Venmo overrides) or are financial-planning reference
+ * documents that Liquidity Gate — which ingests bank/credit-card CSV feeds only —
+ * can never ingest (insurance policies, tax returns, leases). This function maps
+ * each row to its reviewed {@link ChecklistStatus} and {@link ChecklistScope}.
+ *
+ * Matching is intentionally fuzzy (category id + key nouns in the document label)
+ * so wording tweaks in the tracker CSV don't silently drop a disposition. Order
+ * matters: the more specific rules run before the category-wide fallbacks.
+ */
+export function classifyDisposition(
+  categoryId: string,
+  document: string,
+  obtained: boolean,
+): { status: ChecklistStatus; scope: ChecklistScope } {
+  const doc = document.toLowerCase();
+  const hasAny = (...keys: string[]) => keys.some((key) => doc.includes(key));
+
+  const enrichment: ChecklistScope = 'transaction_enrichment';
+  const planningRef: ChecklistScope = 'financial_planning_ref';
+
+  // Resolved via transaction overrides: Venmo pet rows reclassified 2026-06-03.
+  if (hasAny('dog grooming', 'daycare', 'boarding')) {
+    return { status: 'resolved', scope: enrichment };
+  }
+
+  // Deferred planning references — not transaction sources, never ingested.
+  // Entire Insurance & Protection (E) and Tax Documents (I) categories.
+  if (categoryId === 'E' || categoryId === 'I') {
+    return { status: 'deferred_planning', scope: planningRef };
+  }
+  // Rental Property (F) — everything except the actual rent payment history.
+  if (categoryId === 'F' && !doc.includes('rent payment history')) {
+    return { status: 'deferred_planning', scope: planningRef };
+  }
+  // Household service contracts (HVAC / pest / appliance) are reference only.
+  if (categoryId === 'D' && doc.includes('household service contract')) {
+    return { status: 'deferred_planning', scope: planningRef };
+  }
+  // Fidelity HSA *statements* are a planning ref; the HSA debit-card CSV is not.
+  if (categoryId === 'G' && doc.includes('hsa statement')) {
+    return { status: 'deferred_planning', scope: planningRef };
+  }
+  // YTD medical deductible / OOP-max tracker is a planning worksheet.
+  if (categoryId === 'G' && hasAny('deductible', 'oop-max', 'oop max')) {
+    return { status: 'deferred_planning', scope: planningRef };
+  }
+
+  // Not needed — the transaction feed already covers these at high confidence.
+  // P2P apps: Venmo rows in Beacon were manually overridden (household_role/pet).
+  if (hasAny('venmo', 'paypal', 'zelle', 'cash app')) {
+    return { status: 'not_needed', scope: enrichment };
+  }
+  // Amazon / Instacart line-item exports — base rows already classified.
+  if (doc.includes('amazon order history') || hasAny('instacart', 'grocery delivery')) {
+    return { status: 'not_needed', scope: enrichment };
+  }
+  // Every Subscriptions & Apps (H) item — the charges land on Chase/Citi already.
+  if (categoryId === 'H') {
+    return { status: 'not_needed', scope: enrichment };
+  }
+  // Utility / service bills — vendors are identifiable from transaction descriptions.
+  if (
+    categoryId === 'D' &&
+    hasAny('electric', 'gas', 'water', 'internet', 'cell phone', 'security system')
+  ) {
+    return { status: 'not_needed', scope: enrichment };
+  }
+
+  // Default: still actionable transaction enrichment. Obtained rows are resolved.
+  return { status: obtained ? 'resolved' : 'open', scope: enrichment };
 }
 
 export class TrackerCsvUnavailableError extends Error {
@@ -112,10 +197,12 @@ export async function loadChecklistDataset(): Promise<ChecklistDataset> {
       if (file.modifiedMs == null) return latest;
       return latest == null || file.modifiedMs > latest ? file.modifiedMs : latest;
     }, null);
+    const categoryId = deriveCategoryId(scoringRow.category);
+    const { status, scope } = classifyDisposition(categoryId, scoringRow.document, obtained);
     return {
       id: `doc-${index + 1}`,
       category: scoringRow.category,
-      categoryId: deriveCategoryId(scoringRow.category),
+      categoryId,
       document: scoringRow.document,
       subjectMatter: scoringRow.subjectMatter,
       format: scoringRow.format,
@@ -124,6 +211,8 @@ export async function loadChecklistDataset(): Promise<ChecklistDataset> {
       whyNeeded: scoringRow.whyNeeded,
       obtained,
       obtainedSource,
+      status,
+      scope,
       matchedFiles,
       lastModifiedMs,
       dateAdded: row['Date Added'] ?? '',

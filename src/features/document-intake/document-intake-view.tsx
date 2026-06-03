@@ -33,8 +33,18 @@ function isEssentialItem(item: ChecklistItem): boolean {
   return item.priority.includes('Essential');
 }
 
+/** Items still on the active worklist: open, or resolved/obtained. */
+function isActionableStatus(item: ChecklistItem): boolean {
+  return item.status === 'open' || item.status === 'resolved';
+}
+
+/** Items the coverage review took off the worklist (not needed / planning ref). */
+function isOutOfScope(item: ChecklistItem): boolean {
+  return item.status === 'not_needed' || item.status === 'deferred_planning';
+}
+
 function matchesChecklistFilter(item: ChecklistItem, filter: ChecklistFilter): boolean {
-  if (filter.status === 'open' && item.obtained) {
+  if (filter.status === 'open' && (item.obtained || item.status === 'resolved')) {
     return false;
   }
   if (filter.priority === 'essential' && !isEssentialItem(item)) {
@@ -84,10 +94,15 @@ export function DocumentIntakeView({ query, filter, onFilterChange }: DocumentIn
 
   const { items, summary, watchRoot } = query.data;
   const transactionCounts = transactionCountsQuery.data ?? new Map<string, number>();
-  const coreItems = items.filter(isEssentialItem);
+  // Progress only counts actionable items — not_needed / deferred_planning rows
+  // were taken off the worklist by the coverage review and must not inflate gaps.
+  const actionableItems = items.filter(isActionableStatus);
+  const coreItems = actionableItems.filter(isEssentialItem);
   const coreSources = coreItems.length;
   const coreReady = coreItems.filter((item) => item.obtained).length;
-  const openLater = items.filter((item) => !item.obtained && !isEssentialItem(item)).length;
+  const openLater = actionableItems.filter(
+    (item) => !item.obtained && !isEssentialItem(item),
+  ).length;
   const essentialsGap = Math.max(0, coreSources - coreReady);
 
   const handleStartWithEssentials = () => {
@@ -424,11 +439,20 @@ function ChecklistTable({
   onFilterChange,
 }: ChecklistTableProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  // Out-of-scope rows (not needed / planning ref) live in a collapsed section so
+  // actionable open items stay prominent. Hidden by default.
+  const [showOutOfScope, setShowOutOfScope] = useState(false);
+  const visibleItems = items.filter((item) => matchesChecklistFilter(item, filter));
   // Available (obtained) items sort to the top so users see what's ready
   // without scrolling past outstanding items.
-  const filteredItems = items
-    .filter((item) => matchesChecklistFilter(item, filter))
+  const actionableItems = visibleItems
+    .filter(isActionableStatus)
     .sort((a, b) => Number(b.obtained) - Number(a.obtained));
+  // Group the de-scoped rows by scope so the section reads as two labelled bands:
+  // already-covered transaction sources, then financial-planning references.
+  const notNeededItems = visibleItems.filter((item) => item.status === 'not_needed');
+  const planningRefItems = visibleItems.filter((item) => item.status === 'deferred_planning');
+  const outOfScopeCount = notNeededItems.length + planningRefItems.length;
   const defaultFilter = isDefaultFilter(filter);
 
   const toggleExpand = (id: string) => {
@@ -471,7 +495,8 @@ function ChecklistTable({
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink/[0.08] px-4 py-3">
         <span className="text-[11px] text-ink/50 tnum">
-          {filteredItems.length} of {items.length} sources
+          {actionableItems.length} active {actionableItems.length === 1 ? 'source' : 'sources'}
+          {outOfScopeCount > 0 ? ` · ${outOfScopeCount} not in scope` : ''}
         </span>
         <div className="flex flex-wrap items-center gap-1">
           <ChecklistFilterButton
@@ -521,7 +546,7 @@ function ChecklistTable({
             </tr>
           </thead>
           <tbody>
-            {filteredItems.length === 0 ? (
+            {actionableItems.length === 0 && outOfScopeCount === 0 ? (
               <tr>
                 <td
                   colSpan={6}
@@ -538,20 +563,107 @@ function ChecklistTable({
                 </td>
               </tr>
             ) : (
-              filteredItems.map((item) => (
-                <ChecklistRow
-                  key={item.id}
-                  item={item}
-                  transactionCounts={transactionCounts}
-                  expanded={expandedIds.has(item.id)}
-                  onToggleExpand={() => toggleExpand(item.id)}
-                />
-              ))
+              <>
+                {actionableItems.map((item) => (
+                  <ChecklistRow
+                    key={item.id}
+                    item={item}
+                    transactionCounts={transactionCounts}
+                    expanded={expandedIds.has(item.id)}
+                    onToggleExpand={() => toggleExpand(item.id)}
+                  />
+                ))}
+                {outOfScopeCount > 0 ? (
+                  <>
+                    <OutOfScopeToggleRow
+                      count={outOfScopeCount}
+                      expanded={showOutOfScope}
+                      onToggle={() => setShowOutOfScope((v) => !v)}
+                    />
+                    {showOutOfScope ? (
+                      <>
+                        {notNeededItems.length > 0 ? (
+                          <ScopeDividerRow label="Already covered by the transaction feed" />
+                        ) : null}
+                        {notNeededItems.map((item) => (
+                          <ChecklistRow
+                            key={item.id}
+                            item={item}
+                            transactionCounts={transactionCounts}
+                            expanded={expandedIds.has(item.id)}
+                            onToggleExpand={() => toggleExpand(item.id)}
+                          />
+                        ))}
+                        {planningRefItems.length > 0 ? (
+                          <ScopeDividerRow label="Financial planning reference — not ingested" />
+                        ) : null}
+                        {planningRefItems.map((item) => (
+                          <ChecklistRow
+                            key={item.id}
+                            item={item}
+                            transactionCounts={transactionCounts}
+                            expanded={expandedIds.has(item.id)}
+                            onToggleExpand={() => toggleExpand(item.id)}
+                          />
+                        ))}
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+              </>
             )}
           </tbody>
         </table>
       </div>
     </section>
+  );
+}
+
+function OutOfScopeToggleRow({
+  count,
+  expanded,
+  onToggle,
+}: {
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <tr style={{ boxShadow: 'inset 0 -1px 0 rgba(22,33,38,0.08)' }}>
+      <td colSpan={6} className="bg-paper/40 px-4 py-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex w-full items-center gap-2 text-left text-[11px] font-medium uppercase tracking-[0.14em] text-ink/50 transition-colors hover:text-ink/75"
+        >
+          <span
+            className={cn('inline-block transition-transform', expanded ? 'rotate-180' : '')}
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </span>
+          Not in scope
+          <span className="rounded-full bg-ink/[0.06] px-1.5 py-0.5 text-[10px] tnum text-ink/55">
+            {count}
+          </span>
+          <span className="font-normal normal-case tracking-normal text-ink/40">
+            {expanded ? 'Hide' : 'Already covered or planning-only — show'}
+          </span>
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function ScopeDividerRow({ label }: { label: string }) {
+  return (
+    <tr className="bg-paper/60">
+      <td
+        colSpan={6}
+        className="px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.16em] text-ink/40"
+      >
+        {label}
+      </td>
+    </tr>
   );
 }
 
@@ -634,6 +746,21 @@ function ChecklistRow({
                 </div>
               ) : null}
             </>
+          ) : item.status === 'resolved' ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-moss/12 px-2 py-0.5 text-[11px] font-medium text-moss">
+              <Check className="h-3 w-3" />
+              Resolved
+            </span>
+          ) : item.status === 'not_needed' ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-ink/[0.06] px-2 py-0.5 text-[11px] font-medium text-ink/45">
+              <span className="h-1.5 w-1.5 rounded-full bg-ink/30" />
+              Not needed
+            </span>
+          ) : item.status === 'deferred_planning' ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-tide/[0.1] px-2 py-0.5 text-[11px] font-medium text-tide">
+              <span className="h-1.5 w-1.5 rounded-full bg-tide/60" />
+              Planning ref
+            </span>
           ) : (
             <span
               className={cn(
