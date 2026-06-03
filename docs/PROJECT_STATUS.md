@@ -257,7 +257,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Unpaired Ally HYSA `Requested transfer from …` rows auto-reclassified as `direction='inflow'` after the pairing pass (`ally_inbound_reclassified` reported in `PairTransfersResult`)
 
 ### MCP integration
-- [x] 17 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`, `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`, `refresh_hysa_gate`, `compute_monthly_summary`, `generate_monthly_summary`, `ingest_check_register`, `ingest_check_deposit_ledger`, `list_lifecycle_audit_candidates`, `get_annual_reference`
+- [x] 18 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`, `upsert_balance_checkpoint`, `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`, `refresh_hysa_gate`, `compute_monthly_summary`, `generate_monthly_summary`, `ingest_check_register`, `ingest_check_deposit_ledger`, `list_lifecycle_audit_candidates`, `get_annual_reference`
 - [x] 4 resources: `docs://master-index`, `docs://tracker`, `docs://project-status`, `watch://recent-events`
 - [x] 1 spending-first prompt: `financial_detective`
 - [x] Wired to Claude Desktop via [`%APPDATA%\Claude\claude_desktop_config.json`](https://docs.anthropic.com)
@@ -291,6 +291,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] `variance_explanation` preserved across reruns (human note survives recomputation)
 - [x] `reconcile_periods` MCP tool wired into the server
 - [x] Dashboard variance card per account with Green (<$1) / Yellow ($1–$10) / Red (>$10) / "No statement" badge
+- [x] **Balance checkpoints** (`upsert_balance_checkpoint` MCP tool): durable, dated, non-destructive balance assertions for cash accounts that carry no CSV `running_balance` (Ally HYSA today). Writes `"<date>" = <balance> # <note>` under `[statement_closings.<account>]` in `balances.toml` (round-tripped with tomlkit — existing entries/comments preserved), then refreshes the Ally HYSA gate and re-runs the account's reconcile. Reconcile consumes a checkpoint dated `D=X` with **mid-month semantics**: it verifies `prior_closing + net(period_start..D) == X` (reported as the checkpoint-verification `variance_amount`) and re-anchors so the next period opens from `X + net(D+1..period_end)`, recorded with `closing_balance_source='checkpoint'` (free-text column, no migration needed; wins over `metadata_running_balance`). `D == period_end` collapses to the simple case (closing = `X`); with multiple checkpoints in a month the latest governs the forward carry and earlier ones are verification points. Credit-card accounts are rejected. A per-account **staleness flag** (`checkpoint_stale`, additive optional field on the reconcile summary) is true when the checkpoint predates the newest ingested transaction for the account or is >35 days old (server clock `DATE('now','localtime')`), distinguishing "net math is internally consistent" from "absolute balance is currently verified".
 
 ### Documentation
 - [x] README with first-time setup, naming conventions, Cowork wiring
