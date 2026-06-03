@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .annual_reference import load_annual_reference
 from .balances import load_balances
+from .checkpoints import upsert_balance_checkpoint as upsert_balance_checkpoint_impl
 from .computed_balance import refresh_hysa_gate as refresh_hysa_gate_impl
 from .computed_balance import seed_balance_anchors
 from .config import load_settings
@@ -27,6 +28,7 @@ from .models import (
     ReconcilePeriodsRequest,
     ReconcileTransactionsRequest,
     SqlQueryRequest,
+    UpsertBalanceCheckpointRequest,
     UpsertClassificationRuleRequest,
     UpsertTransactionOverrideRequest,
 )
@@ -198,6 +200,45 @@ def reconcile_periods(request: dict) -> dict:
     parsed_request = ReconcilePeriodsRequest.model_validate(request)
     balances = load_balances(settings.watch_root)
     return reconcile_periods_impl(database, balances, parsed_request).model_dump()
+
+
+@mcp.tool()
+def upsert_balance_checkpoint(request: dict) -> dict:
+    """Assert a true, dated balance for a cash account and re-anchor from it.
+
+    Writes a durable, human-auditable balance assertion (e.g. "Ally HYSA =
+    $35,000 as of 2026-06-02") under ``[statement_closings.<account>]`` in
+    ``balances.toml`` — NOT into the transactions table, so it survives
+    re-ingest and reclassify. Existing entries and comments in the file are
+    preserved (the TOML is round-tripped).
+
+    Required keys inside *request*:
+
+    - ``account`` (str): exact ``accounts.id`` OR a case-insensitive institution
+      alias (``ally``, ``chase``, ``beacon``, ``webster``) — resolved id-first,
+      then alias, the same order balances.toml uses.
+    - ``date`` (str, ``YYYY-MM-DD``): the as-of date of the observed balance.
+    - ``balance`` (number): the true end-of-day balance at ``date``.
+
+    Optional:
+
+    - ``note`` (str): free text stored as a TOML inline comment on the entry.
+
+    The checkpoint asserts the end-of-day balance at ``date``; the reconcile
+    pass verifies it against the prior chain (reporting a checkpoint-verification
+    variance) and re-anchors so future periods chain forward from it. After
+    writing, the Ally HYSA gate is refreshed and the affected account's
+    reconcile pass re-runs.
+
+    Checkpoints are cash-account only: a credit-card account is rejected.
+
+    Returns the written entry plus the post-reconcile state for that account —
+    the checkpoint period's ``statement_closing_balance``,
+    ``computed_closing_balance``, ``variance_amount``, the re-anchored
+    ``next_period_opening_balance``, and the ``checkpoint_stale`` flag.
+    """
+    parsed_request = UpsertBalanceCheckpointRequest.model_validate(request)
+    return upsert_balance_checkpoint_impl(database, settings, parsed_request).model_dump()
 
 
 @mcp.tool()

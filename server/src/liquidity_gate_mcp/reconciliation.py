@@ -4,7 +4,7 @@ import json
 import sqlite3
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 from .balances import AccountBalances, BalancesConfig
@@ -38,6 +38,21 @@ AMBIGUOUS_INTRADAY_NOTE = (
     "into a single running-balance chain; closing balance derivation fell back "
     "to the highest running balance and may be wrong."
 )
+
+# Provenance value stored on reconciliation_periods.closing_balance_source when
+# an explicit balance checkpoint (a dated [statement_closings.<account>] entry)
+# governs the period. Wins over metadata_running_balance. The column is free
+# text (no CHECK constraint), so adding this value needs no migration.
+CHECKPOINT_SOURCE = "checkpoint"
+
+# Single-line marker that prefixes the system-generated checkpoint note in
+# variance_explanation. Used to strip a prior run's checkpoint note before
+# regenerating it, so re-runs stay idempotent while preserving any human note.
+CHECKPOINT_NOTE_PREFIX = "Checkpoint re-anchor:"
+
+# A checkpoint is stale once its as-of date is more than this many calendar
+# days before "today" (the server clock). See _checkpoint_stale.
+CHECKPOINT_STALE_DAYS = 35
 
 
 @dataclass(frozen=True)
@@ -187,12 +202,21 @@ def reconcile_periods(
     try:
         accounts = _load_accounts(connection, request.account_ids)
         months = _months_in_range(request.period_start, request.period_end)
+        # Single clock for the whole run — the same source the SQL views use
+        # (DATE('now','localtime')). Drives checkpoint staleness so there is
+        # never a second, divergent notion of "today".
+        today = _server_today(connection)
 
         summaries: list[ReconciliationPeriodSummary] = []
         for account in accounts:
             entry = balances.lookup(
                 account_id=account.id, institution=account.institution
             )
+            # Checkpoints apply only to cash accounts that carry no CSV running
+            # balance (Ally HYSA today). Beacon/Webster derive their closings
+            # from running_balance metadata and keep their existing behavior;
+            # credit cards are out of scope entirely.
+            has_running_balance = _account_has_running_balance(connection, account.id)
             # Seed the first requested month.
             #
             # The balances.toml opening seed is the authoritative anchor for the
@@ -232,6 +256,8 @@ def reconcile_periods(
                     period_end=period_end,
                     opening=running_opening,
                     entry=entry,
+                    has_running_balance=has_running_balance,
+                    today=today,
                 )
                 _upsert(connection, summary)
                 # Roll forward: prefer statement, fall back to computed.
@@ -319,7 +345,29 @@ def _compute_period(
     period_end: date,
     opening: float | None,
     entry: AccountBalances,
+    has_running_balance: bool,
+    today: date,
 ) -> ReconciliationPeriodSummary:
+    # Checkpoint path: a cash account with no running balance and an explicit
+    # dated entry inside this period. The entry asserts a true end-of-day
+    # balance at its date; it is consumed with mid-month semantics rather than
+    # treated as a plain month-end statement closing.
+    if not has_running_balance and account.account_type != "credit_card":
+        checkpoint_dates = sorted(
+            d for d in entry.statement_closings if period_start <= d <= period_end
+        )
+        if checkpoint_dates:
+            return _compute_checkpoint_period(
+                connection,
+                account=account,
+                period_start=period_start,
+                period_end=period_end,
+                opening=opening,
+                entry=entry,
+                checkpoint_dates=checkpoint_dates,
+                today=today,
+            )
+
     breakdown = _breakdown(connection, account.id, period_start, period_end)
 
     computed_closing: float | None
@@ -376,6 +424,242 @@ def _compute_period(
         variance_amount=variance,
         variance_explanation=explanation,
     )
+
+
+def _next_day(d: date) -> date:
+    return d + timedelta(days=1)
+
+
+def _server_today(connection: sqlite3.Connection) -> date:
+    """Today's date from the same clock the SQL views use.
+
+    ``v_computed_balance`` filters on ``DATE('now','localtime')``; reading the
+    same expression here keeps checkpoint staleness on one clock rather than
+    introducing a second (e.g. Python ``date.today()``) that could disagree
+    across a timezone boundary.
+    """
+    row = connection.execute("SELECT DATE('now', 'localtime') AS d").fetchone()
+    return date.fromisoformat(row["d"])
+
+
+def _account_has_running_balance(
+    connection: sqlite3.Connection, account_id: str
+) -> bool:
+    """True when any transaction for the account carries a running_balance.
+
+    This is the gate for checkpoint behavior: Beacon/Webster CSVs embed a
+    ``running_balance`` in metadata (so their closings are CSV-derived and
+    checkpoints do not apply), while Ally/Chase/Citi do not. Today that selects
+    Ally HYSA as the only cash account eligible for checkpoints — no per-account
+    flag or column is introduced.
+    """
+    cursor = connection.execute(
+        "SELECT metadata_json FROM transactions "
+        "WHERE account_id = ? AND metadata_json LIKE '%running_balance%' LIMIT 5",
+        (account_id,),
+    )
+    for row in cursor.fetchall():
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        if metadata.get("running_balance") is not None:
+            return True
+    return False
+
+
+def _checkpoint_stale(
+    connection: sqlite3.Connection,
+    account_id: str,
+    checkpoint_date: date,
+    today: date,
+) -> bool:
+    """Whether the governing checkpoint can still be trusted as a fresh anchor.
+
+    Stale when EITHER the checkpoint predates the newest ingested transaction
+    for the account (activity has been imported past the last anchor, so the
+    absolute balance is no longer verified), OR the checkpoint is more than
+    :data:`CHECKPOINT_STALE_DAYS` calendar days old. A green reconcile only
+    proves the net math is internally consistent since the anchor — this flag
+    makes the "but the anchor itself may be old" distinction explicit.
+    """
+    row = connection.execute(
+        "SELECT MAX(occurred_on) AS m FROM transactions WHERE account_id = ?",
+        (account_id,),
+    ).fetchone()
+    last_tx = row["m"] if row else None
+    if last_tx:
+        try:
+            if date.fromisoformat(str(last_tx)[:10]) > checkpoint_date:
+                return True
+        except ValueError:
+            pass
+    return (today - checkpoint_date).days > CHECKPOINT_STALE_DAYS
+
+
+def _compute_checkpoint_period(
+    connection: sqlite3.Connection,
+    *,
+    account: _Account,
+    period_start: date,
+    period_end: date,
+    opening: float | None,
+    entry: AccountBalances,
+    checkpoint_dates: list[date],
+    today: date,
+) -> ReconciliationPeriodSummary:
+    """Consume one or more in-period checkpoints with mid-month semantics.
+
+    A checkpoint dated ``D`` with balance ``X`` asserts: the true end-of-day
+    balance at ``D`` is ``X``; everything posted on/before ``D`` is already
+    inside ``X``; everything after ``D`` chains forward from ``X``. So the
+    figure carried into the next period's opening is ``X + net(D+1 .. period_end)``,
+    NOT the unanchored chain.
+
+    The latest checkpoint in the period governs the forward carry; earlier
+    checkpoints are additional verification points. ``D == period_end`` collapses
+    to the simple case (net after ``D`` is empty, so the re-anchored closing is
+    just ``X``).
+
+    ``net(range) = inflows - outflows + transfers_in - transfers_out`` over the
+    range — identical to the existing chain math (``_Breakdown.net_signed``).
+    Checkpoint accounts are never credit cards, so asset sign conventions apply.
+    """
+    breakdown = _breakdown(connection, account.id, period_start, period_end)
+
+    governing_date = checkpoint_dates[-1]
+    governing_balance = round(float(entry.statement_closings[governing_date]), 2)
+
+    net_after = _breakdown(
+        connection, account.id, _next_day(governing_date), period_end
+    ).net_signed
+    # Re-anchored end-of-period balance — the value future periods chain from.
+    reanchored = round(governing_balance + net_after, 2)
+
+    # Unanchored chain closing keeps its existing meaning (opening + full net).
+    computed_closing = None if opening is None else round(opening + breakdown.net_signed, 2)
+
+    # Verification delta. By the net identity this equals
+    # reanchored - computed_closing == X - (opening + net(period_start .. D)),
+    # i.e. how far the checkpoint diverges from the chain it should confirm.
+    variance: float | None = None
+    if computed_closing is not None:
+        variance = round(reanchored - computed_closing, 2)
+        if abs(variance) <= 0.01:
+            variance = 0.0
+
+    note = _build_checkpoint_note(
+        connection,
+        account=account,
+        period_start=period_start,
+        period_end=period_end,
+        opening=opening,
+        entry=entry,
+        checkpoint_dates=checkpoint_dates,
+        governing_date=governing_date,
+        governing_balance=governing_balance,
+        net_after=net_after,
+        reanchored=reanchored,
+        variance=variance,
+    )
+
+    # Preserve any human note; replace a prior run's checkpoint note (single
+    # line, marker-prefixed) so re-runs stay idempotent.
+    existing = _existing_explanation(connection, account.id, period_start, period_end)
+    human_lines = [
+        line
+        for line in existing.split("\n")
+        if line.strip() and not line.startswith(CHECKPOINT_NOTE_PREFIX)
+    ]
+    human = "\n".join(human_lines).strip()
+    explanation = note if not human else f"{note}\n{human}"
+
+    stale = _checkpoint_stale(connection, account.id, governing_date, today)
+
+    return ReconciliationPeriodSummary(
+        account_id=account.id,
+        account_label=f"{account.institution} · {account.account_name}",
+        account_type=account.account_type,
+        period_start=period_start.isoformat(),
+        period_end=period_end.isoformat(),
+        statement_opening_balance=opening,
+        statement_closing_balance=reanchored,
+        closing_balance_source=CHECKPOINT_SOURCE,
+        computed_inflows=round(breakdown.inflows, 2),
+        computed_outflows=round(breakdown.outflows, 2),
+        computed_transfers_in=round(breakdown.transfers_in, 2),
+        computed_transfers_out=round(breakdown.transfers_out, 2),
+        computed_closing_balance=computed_closing,
+        variance_amount=variance,
+        variance_explanation=explanation,
+        checkpoint_stale=stale,
+    )
+
+
+def _build_checkpoint_note(
+    connection: sqlite3.Connection,
+    *,
+    account: _Account,
+    period_start: date,
+    period_end: date,
+    opening: float | None,
+    entry: AccountBalances,
+    checkpoint_dates: list[date],
+    governing_date: date,
+    governing_balance: float,
+    net_after: float,
+    reanchored: float,
+    variance: float | None,
+) -> str:
+    """Single-line, human-auditable checkpoint explanation.
+
+    Kept to one line (no embedded newlines) so a prior run's note can be
+    stripped by line before regeneration. Includes the governing re-anchor and,
+    when more than one checkpoint falls in the period, a chained verification
+    delta for each earlier checkpoint (``net`` between consecutive checkpoints
+    should close).
+    """
+    parts: list[str] = []
+    if opening is None:
+        parts.append(
+            f"{CHECKPOINT_NOTE_PREFIX} {governing_date.isoformat()} balance "
+            f"{governing_balance:.2f} taken as forward anchor (no prior opening to "
+            f"verify); next period opens from {reanchored:.2f} "
+            f"= {governing_balance:.2f} + net({_next_day(governing_date).isoformat()}.."
+            f"{period_end.isoformat()}) {net_after:+.2f}."
+        )
+    else:
+        net_to_governing = _breakdown(
+            connection, account.id, period_start, governing_date
+        ).net_signed
+        parts.append(
+            f"{CHECKPOINT_NOTE_PREFIX} {governing_date.isoformat()} balance "
+            f"{governing_balance:.2f}; verification delta {variance:+.2f} vs chain "
+            f"({opening:.2f} + net({period_start.isoformat()}.."
+            f"{governing_date.isoformat()}) {net_to_governing:+.2f}); forward carry "
+            f"re-anchored to {reanchored:.2f} (+ net after {governing_date.isoformat()} "
+            f"{net_after:+.2f})."
+        )
+
+    # Earlier checkpoints: verify each against the prior anchor in the chain.
+    if len(checkpoint_dates) > 1 and opening is not None:
+        prev_balance = opening
+        prev_boundary = period_start
+        clauses: list[str] = []
+        for d in checkpoint_dates:
+            seg_net = _breakdown(connection, account.id, prev_boundary, d).net_signed
+            x = round(float(entry.statement_closings[d]), 2)
+            delta = round(x - (prev_balance + seg_net), 2)
+            if abs(delta) <= 0.01:
+                delta = 0.0
+            if d != governing_date:
+                clauses.append(f"{d.isoformat()}={x:.2f} delta {delta:+.2f}")
+            prev_balance = x
+            prev_boundary = _next_day(d)
+        if clauses:
+            parts.append(" Earlier checkpoints verified: " + "; ".join(clauses) + ".")
+
+    return "".join(parts)
 
 
 def _breakdown(
