@@ -330,6 +330,78 @@ def test_discretionary_scope_includes_only_locked_categories(
     assert summary["fcf_transactions"]["inflows"] == 5000.0
 
 
+def test_fixed_obligation_transfer_direction_counts(
+    database: DatabaseManager,
+) -> None:
+    # The IonBank mortgage case: a row the parser tagged direction='transfer'
+    # (correct for reconciliation) but reclassified to primary_category=
+    # 'fixed_obligation'. It is real spending and must land in fixed_obligations.
+    connection = database.connect()
+    try:
+        _seed_account(connection)
+        common = dict(account_id="acct-beacon-1234", occurred_on=date(2026, 5, 10))
+        _insert_tx(connection, **common, amount=-1000.0, direction="outflow",
+                   primary_category="fixed_obligation", tx_id="fo-outflow")
+        _insert_tx(connection, **common, amount=4044.66, direction="transfer",
+                   primary_category="fixed_obligation", subcategory="mortgage",
+                   tx_id="fo-ionbank")
+        connection.commit()
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(database, _wealth_bridge(), 2026, 5)
+    # 1000 outflow + 4044.66 transfer-direction mortgage = 5044.66.
+    assert summary["fcf_transactions"]["fixed_obligations"] == 5044.66
+
+
+def test_income_outflow_direction_excluded_from_inflows(
+    database: DatabaseManager,
+) -> None:
+    # The AND-guard on inflows: a primary_category='income' row tagged
+    # direction='outflow' (e.g. a clawback) must NOT count as an inflow.
+    connection = database.connect()
+    try:
+        _seed_account(connection)
+        common = dict(account_id="acct-beacon-1234", occurred_on=date(2026, 5, 10))
+        _insert_tx(connection, **common, amount=5000.0, direction="inflow",
+                   primary_category="income", tx_id="inc-inflow")
+        _insert_tx(connection, **common, amount=-750.0, direction="outflow",
+                   primary_category="income", tx_id="inc-outflow")
+        connection.commit()
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(database, _wealth_bridge(), 2026, 5)
+    # Only the inflow income counts; the outflow income row is excluded.
+    assert summary["fcf_transactions"]["inflows"] == 5000.0
+
+
+def test_transfer_category_never_counts_regardless_of_direction(
+    database: DatabaseManager,
+) -> None:
+    # primary_category='transfer' is excluded from every spend bucket no matter
+    # the direction — category, not direction, is the gate.
+    connection = database.connect()
+    try:
+        _seed_account(connection)
+        common = dict(account_id="acct-beacon-1234", occurred_on=date(2026, 5, 10))
+        _insert_tx(connection, **common, amount=-1500.0, direction="outflow",
+                   primary_category="transfer", tx_id="xfer-outflow")
+        _insert_tx(connection, **common, amount=-2500.0, direction="transfer",
+                   primary_category="transfer", tx_id="xfer-transfer")
+        _insert_tx(connection, **common, amount=3500.0, direction="inflow",
+                   primary_category="transfer", tx_id="xfer-inflow")
+        connection.commit()
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(database, _wealth_bridge(), 2026, 5)
+    fcf = summary["fcf_transactions"]
+    assert fcf["fixed_obligations"] == 0.0
+    assert fcf["discretionary"] == 0.0
+    assert fcf["inflows"] == 0.0
+
+
 def test_hysa_delta_is_account_scoped_all_categories(
     database: DatabaseManager,
 ) -> None:
