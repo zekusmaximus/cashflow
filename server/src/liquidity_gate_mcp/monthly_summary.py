@@ -34,9 +34,14 @@ from .models import AnnualReferenceEntry
 from .monthly_summary_flags import FlagInputs, detect_flags
 from .monthly_summary_renderer import write_monthly_summary
 
-# Discretionary scope is locked: outflows in exactly these primary categories.
-# Transfers, taxes, fixed_obligation, investment, rental, business_expense and
-# income are excluded by definition. Do not let this drift — the spec pins it.
+# Discretionary scope is locked: spend in exactly these primary categories.
+# Selection is category-driven, not direction-gated — a row counts as
+# discretionary spend by its primary_category regardless of whether the parser
+# tagged it 'outflow' or 'transfer' (direction stays authoritative only for
+# reconciliation / pair_transfers, never here). Only inflow rows are held out,
+# preserving today's refund handling (refunds are not netted into the bucket).
+# The transfer/tax/fixed_obligation/investment/rental/business_expense/income
+# *categories* are still excluded by definition. Do not let this drift.
 DISCRETIONARY_CATEGORIES: tuple[str, ...] = ("variable_lifestyle", "medical", "abnormal")
 
 # Top-mover filter thresholds (Section 3). Existing merchant: prior-month total
@@ -242,11 +247,13 @@ def _hysa_delta(connection: sqlite3.Connection, start: str, end: str) -> float:
 
 
 def _discretionary_sum(connection: sqlite3.Connection, start: str, end: str) -> float:
+    # Category-driven: include outflow and transfer rows in the discretionary
+    # categories; hold out inflows so refunds net exactly as they did before.
     placeholders = ",".join("?" * len(DISCRETIONARY_CATEGORIES))
     return _scalar(
         connection,
         f"SELECT COALESCE(SUM(ABS(amount)), 0) AS v FROM transactions "
-        f"WHERE primary_category IN ({placeholders}) AND direction = 'outflow' "
+        f"WHERE primary_category IN ({placeholders}) AND direction != 'inflow' "
         f"AND occurred_on >= ? AND occurred_on < ?",
         (*DISCRETIONARY_CATEGORIES, start, end),
     )
@@ -255,11 +262,16 @@ def _discretionary_sum(connection: sqlite3.Connection, start: str, end: str) -> 
 def _merchant_totals(
     connection: sqlite3.Connection, start: str, end: str
 ) -> tuple[dict[str, float], dict[str, str]]:
-    """Discretionary outflow totals per merchant key over [start, end)."""
+    """Discretionary spend totals per merchant key over [start, end).
+
+    Mirrors ``_discretionary_sum``'s category-driven selection so the per-merchant
+    totals reconcile to the bucket: outflow + transfer rows in scope, inflows held
+    out.
+    """
     placeholders = ",".join("?" * len(DISCRETIONARY_CATEGORIES))
     rows = connection.execute(
         f"SELECT merchant_normalized, description_raw, amount FROM transactions "
-        f"WHERE primary_category IN ({placeholders}) AND direction = 'outflow' "
+        f"WHERE primary_category IN ({placeholders}) AND direction != 'inflow' "
         f"AND occurred_on >= ? AND occurred_on < ?",
         (*DISCRETIONARY_CATEGORIES, start, end),
     ).fetchall()
@@ -359,16 +371,23 @@ def compute_monthly_summary(
         trailing_3mo_avg = round(sum(trailing_deltas) / 3.0, 2)
 
         # --- Section 2: transactions view -----------------------------------
+        # Income inflows. The primary_category guard is deliberate: it pins this
+        # to genuine income and protects against any future direction-agnostic
+        # income rule leaking non-income inflows into the top line.
         inflows = _scalar(
             connection,
             "SELECT COALESCE(SUM(amount), 0) AS v FROM transactions "
-            "WHERE direction = 'inflow' AND occurred_on >= ? AND occurred_on < ?",
+            "WHERE primary_category = 'income' AND direction = 'inflow' "
+            "AND occurred_on >= ? AND occurred_on < ?",
             (month_start, next_month_start),
         )
+        # Fixed obligations are category-driven: a 'transfer'-direction row whose
+        # primary_category is fixed_obligation (e.g. the IonBank mortgage) is real
+        # spending and must count. Only inflows are held out (refunds net as before).
         fixed_obligations = _scalar(
             connection,
             "SELECT COALESCE(SUM(ABS(amount)), 0) AS v FROM transactions "
-            "WHERE primary_category = 'fixed_obligation' AND direction = 'outflow' "
+            "WHERE primary_category = 'fixed_obligation' AND direction != 'inflow' "
             "AND occurred_on >= ? AND occurred_on < ?",
             (month_start, next_month_start),
         )
