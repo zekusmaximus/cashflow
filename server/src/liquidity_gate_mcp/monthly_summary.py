@@ -246,9 +246,47 @@ def _hysa_delta(connection: sqlite3.Connection, start: str, end: str) -> float:
     )
 
 
+def _income_inflows(connection: sqlite3.Connection, start: str, end: str) -> float:
+    """Income inflows over [start, end) — the summary's top line.
+
+    The ``primary_category = 'income'`` guard is deliberate: it pins this to
+    genuine income and keeps non-income inflows (HYSA drawdowns, which are
+    ``transfer`` anyway, etc.) out of the top line. Mirrored by the
+    ``monthly_cashflow_summary`` view's ``inflow`` column — see
+    ``server/sql/schema.sql``; the two must stay in sync.
+    """
+    return _scalar(
+        connection,
+        "SELECT COALESCE(SUM(amount), 0) AS v FROM transactions "
+        "WHERE primary_category = 'income' AND direction = 'inflow' "
+        "AND occurred_on >= ? AND occurred_on < ?",
+        (start, end),
+    )
+
+
+def _fixed_obligation_sum(connection: sqlite3.Connection, start: str, end: str) -> float:
+    """Fixed-obligation spend over [start, end) — category-driven.
+
+    A ``direction='transfer'`` row whose ``primary_category`` is
+    ``fixed_obligation`` (e.g. the IonBank mortgage, DL-2026-06-10-A) is real
+    spending and must count. Only inflows are held out (refunds net as before).
+    Mirrored by the ``fixed_obligation`` term of the ``monthly_cashflow_summary``
+    view's ``outflow`` column — see ``server/sql/schema.sql``.
+    """
+    return _scalar(
+        connection,
+        "SELECT COALESCE(SUM(ABS(amount)), 0) AS v FROM transactions "
+        "WHERE primary_category = 'fixed_obligation' AND direction != 'inflow' "
+        "AND occurred_on >= ? AND occurred_on < ?",
+        (start, end),
+    )
+
+
 def _discretionary_sum(connection: sqlite3.Connection, start: str, end: str) -> float:
     # Category-driven: include outflow and transfer rows in the discretionary
     # categories; hold out inflows so refunds net exactly as they did before.
+    # Mirrored by the discretionary terms of the monthly_cashflow_summary view's
+    # outflow column — see server/sql/schema.sql; keep the two in sync.
     placeholders = ",".join("?" * len(DISCRETIONARY_CATEGORIES))
     return _scalar(
         connection,
@@ -371,26 +409,11 @@ def compute_monthly_summary(
         trailing_3mo_avg = round(sum(trailing_deltas) / 3.0, 2)
 
         # --- Section 2: transactions view -----------------------------------
-        # Income inflows. The primary_category guard is deliberate: it pins this
-        # to genuine income and protects against any future direction-agnostic
-        # income rule leaking non-income inflows into the top line.
-        inflows = _scalar(
-            connection,
-            "SELECT COALESCE(SUM(amount), 0) AS v FROM transactions "
-            "WHERE primary_category = 'income' AND direction = 'inflow' "
-            "AND occurred_on >= ? AND occurred_on < ?",
-            (month_start, next_month_start),
-        )
-        # Fixed obligations are category-driven: a 'transfer'-direction row whose
-        # primary_category is fixed_obligation (e.g. the IonBank mortgage) is real
-        # spending and must count. Only inflows are held out (refunds net as before).
-        fixed_obligations = _scalar(
-            connection,
-            "SELECT COALESCE(SUM(ABS(amount)), 0) AS v FROM transactions "
-            "WHERE primary_category = 'fixed_obligation' AND direction != 'inflow' "
-            "AND occurred_on >= ? AND occurred_on < ?",
-            (month_start, next_month_start),
-        )
+        # Income, fixed-obligation and discretionary selection all live in named
+        # helpers so this path, the annual rollup, and the monthly_cashflow_summary
+        # view reference one documented definition each.
+        inflows = _income_inflows(connection, month_start, next_month_start)
+        fixed_obligations = _fixed_obligation_sum(connection, month_start, next_month_start)
         discretionary_this = _discretionary_sum(connection, month_start, next_month_start)
         discretionary_prior = _discretionary_sum(connection, prior_start, prior_next)
         ytd_discretionary = _discretionary_sum(connection, year_start, next_month_start)

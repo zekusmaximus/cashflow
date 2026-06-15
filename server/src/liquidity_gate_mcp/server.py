@@ -14,6 +14,10 @@ from .computed_balance import seed_balance_anchors
 from .config import load_settings
 from .database import DatabaseManager
 from .ingest import ingest_watch_root as ingest_watch_root_impl
+from .annual_summary import (
+    compute_annual_summary as compute_annual_summary_impl,
+    generate_annual_summary as generate_annual_summary_impl,
+)
 from .monthly_summary import (
     compute_monthly_summary as compute_monthly_summary_impl,
     generate_monthly_summary as generate_monthly_summary_impl,
@@ -408,6 +412,47 @@ def generate_monthly_summary(year: int, month: int) -> dict:
         balances.wealth_bridge,
         year,
         month,
+        settings.watch_root,
+        annual_reference=matching,
+    )
+
+
+@mcp.tool()
+def compute_annual_summary(year: int) -> dict:
+    """Compute the annual cashflow spend-summary — pure, no file I/O.
+
+    Returns the year's spend bridge as a per-month series (``months``) plus
+    annual ``totals``, a ``category_breakdown`` reference table, and the spend
+    ``methodology``. Each monthly row reconciles field-for-field to
+    ``compute_monthly_summary`` for that month — the annual view is the monthly
+    view summed, never a separate definition. ``generate_annual_summary`` writes
+    the same data to a markdown file.
+    """
+    balances = load_balances(settings.watch_root)
+    annual = load_annual_reference(settings.watch_root)
+    matching = next((e for e in annual.entries if e.year == year), None)
+    return compute_annual_summary_impl(
+        database, balances.wealth_bridge, year, annual_reference=matching
+    )
+
+
+@mcp.tool()
+def generate_annual_summary(year: int) -> dict:
+    """Generate the annual cashflow spend-summary document — computes and writes .md.
+
+    Calls ``compute_annual_summary``, renders the markdown, and writes it to
+    ``<watch_root>/monthly_summaries/<year>_Annual_Cashflow_Summary.md``
+    (directory created if absent). Returns the same dict as
+    ``compute_annual_summary`` plus ``markdown_path``. Any manual-notes block in a
+    pre-existing file is preserved across regeneration.
+    """
+    balances = load_balances(settings.watch_root)
+    annual = load_annual_reference(settings.watch_root)
+    matching = next((e for e in annual.entries if e.year == year), None)
+    return generate_annual_summary_impl(
+        database,
+        balances.wealth_bridge,
+        year,
         settings.watch_root,
         annual_reference=matching,
     )
