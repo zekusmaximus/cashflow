@@ -239,12 +239,46 @@ VALUES
    'variable_lifestyle', 'groceries', 'Whole Foods', NULL, 'recurring', 'high', 20,
    'Whole Foods grocery purchases');
 
-CREATE VIEW IF NOT EXISTS monthly_cashflow_summary AS
+-- Monthly cashflow rollup — CATEGORY-DRIVEN, never direction-driven. This view
+-- reconciles exactly to compute_monthly_summary in
+-- server/src/liquidity_gate_mcp/monthly_summary.py (inflow == fcf_transactions
+-- .inflows; outflow == .fixed_obligations + .discretionary; net_cash_flow ==
+-- inflow - outflow). Per DL-2026-06-10-A the IonBank mortgage carries
+-- direction='transfer' but primary_category='fixed_obligation', so spend can no
+-- longer be computed from `direction` — a transfer-direction fixed_obligation row
+-- IS spending and must land in `outflow`. Only direction='inflow' rows are held
+-- out of the outflow buckets, so refunds (inflow rows in a spend category) net
+-- out by exclusion exactly as the Python path does.
+--
+--   inflow  = income inflows only (primary_category='income' AND direction='inflow')
+--   outflow = fixed_obligation + discretionary, direction != 'inflow'
+--   net_cash_flow = inflow - outflow
+--
+-- The category strings below are duplicated from monthly_summary.py
+-- (DISCRETIONARY_CATEGORIES = variable_lifestyle/medical/abnormal, plus the
+-- fixed_obligation scalar). Keep the two in sync — the reconciliation test in
+-- server/tests/test_annual_summary.py pins them together. transfer, income, tax,
+-- investment, rental and business_expense are intentionally outside the spend
+-- bridge; do not add them to `outflow`.
+-- Column names (month, inflow, outflow, net_cash_flow) are load-bearing for
+-- src/services/sqlite.ts and the CashFlowMonth type — only the semantics change.
+-- CREATE VIEW IF NOT EXISTS will not replace an existing view, so drop first.
+DROP VIEW IF EXISTS monthly_cashflow_summary;
+CREATE VIEW monthly_cashflow_summary AS
 SELECT
   substr(occurred_on, 1, 7) AS month,
-  ROUND(SUM(CASE WHEN direction = 'inflow' THEN amount ELSE 0 END), 2) AS inflow,
-  ROUND(SUM(CASE WHEN direction = 'outflow' THEN ABS(amount) ELSE 0 END), 2) AS outflow,
-  ROUND(SUM(CASE WHEN direction = 'inflow' THEN amount WHEN direction = 'outflow' THEN amount ELSE 0 END), 2) AS net_cash_flow
+  ROUND(SUM(CASE WHEN primary_category = 'income' AND direction = 'inflow'
+                 THEN amount ELSE 0 END), 2) AS inflow,
+  ROUND(SUM(CASE WHEN primary_category IN
+                      ('fixed_obligation', 'variable_lifestyle', 'medical', 'abnormal')
+                  AND direction != 'inflow'
+                 THEN ABS(amount) ELSE 0 END), 2) AS outflow,
+  ROUND(SUM(CASE WHEN primary_category = 'income' AND direction = 'inflow'
+                 THEN amount ELSE 0 END)
+        - SUM(CASE WHEN primary_category IN
+                      ('fixed_obligation', 'variable_lifestyle', 'medical', 'abnormal')
+                  AND direction != 'inflow'
+                 THEN ABS(amount) ELSE 0 END), 2) AS net_cash_flow
 FROM transactions
 GROUP BY substr(occurred_on, 1, 7)
 ORDER BY month;
