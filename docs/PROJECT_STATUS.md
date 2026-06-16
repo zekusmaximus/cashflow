@@ -11,6 +11,15 @@ reclassified as the home-mortgage payee per DL-2026-06-10-A, snapshot counts and
 classifier coverage refreshed, spend basis moved from direction to category per
 DL-2026-06-15, and two annual-summary MCP tools added.)
 
+> **Canonical live state lives in the watch root, not here.** For current
+> transaction counts, per-account totals, classification coverage, active
+> balance checkpoints, and the known-benign list,
+> `C:\Users\Jeff\Documents\Cashflow\STATUS.md` governs. For closed decisions,
+> `C:\Users\Jeff\Documents\Cashflow\DECISIONS.md` governs (mirrored into
+> [DECISION_LOG.md](DECISION_LOG.md)). This file tracks build status,
+> architecture, and roadmap — describe capabilities and structure here, not
+> live figures.
+
 ## Snapshot
 
 End-to-end spending-first pipeline works for five account types: drop a
@@ -24,9 +33,9 @@ Liquidity Gate MCP is attached. Real-DB
 run on 2026-05-17 produced 31 cross-account pairs
 (including the 5×5 Webster → Beacon cluster on 2026-01-21, which the
 connected-components fallback retires deterministically) and 12 fresh
-Chase rows from the same-day dedup recovery. 1,267 transactions now in the
-local SQLite across five fully-ingested accounts — Chase 1,036 · Beacon 146 ·
-Webster 56 · Ally 19 · Citi 10 — covering 2025-12-30 → 2026-05-29.
+Chase rows from the same-day dedup recovery. All five accounts are fully
+ingested into the local SQLite. See `STATUS.md` for current counts (totals,
+per-account rows, and covered date range).
 
 Scope revision phases 0-3 are complete: docs, Cowork prompts, tracker
 priorities, and the intake UI now treat core transaction feeds as the
@@ -38,9 +47,10 @@ Durable transaction overrides are now live and validated: Cowork can store
 payee/category/role/lifecycle fixes that survive a future YTD-to-monthly
 re-import for the same logical transaction.
 
-Rule-based classifier now has **zero unclassified rows** — 100% coverage
-within the closed vocabulary — across **146 classification rules**. Two Cowork
-sessions on 2026-05-18 built the bulk of the rule set (first pass 10 rules,
+Classification is at the single-occurrence long-tail floor; the closed
+vocabulary is fully applied. Current counts (rules, unclassified rows): see
+`STATUS.md`. Two Cowork sessions on 2026-05-18 built the bulk of the rule set
+(first pass 10 rules,
 second pass 113 new rules) covering all known targets: Zara, Sephora, French
 Cleaners, Servomation, Google One, Venmo, Mobile Check Dep, streaming,
 subscriptions, utilities, retail, dining, fuel, pet, services, advertising,
@@ -62,7 +72,8 @@ identified Cowork deficiencies resolved.
 remaining categories; `unpaired-transfer-diagnostics` in auto-memory has
 full row-level detail:
 
-1. **IonBank ONLINE XFR (18 rows, $35,183.19)** — **not** an uningested
+1. **IonBank ONLINE XFR** (see STATUS.md / DL-2026-06-10-A for current
+   figures) — **not** an uningested
    transfer partner. IonBank is the household's home-mortgage payee (and a
    HELOC being paid off June/July 2026), not an owned liquid account. Per
    DL-2026-06-10-A, every `IonBank ONLINE XFR` row is classified
