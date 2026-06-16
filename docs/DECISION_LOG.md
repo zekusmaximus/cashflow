@@ -7,6 +7,105 @@ here's why we won't revisit that for a while" calls.
 
 ---
 
+## 2026-06-15 — `monthly_cashflow_summary` moved from direction basis to category basis (DL-2026-06-15)
+
+**Context.** Spend buckets were *direction*-driven: outflow meant
+`direction = 'outflow'`. That definition silently dropped any row the parser
+stamped `direction = 'transfer'` even when the row is real spending — most
+importantly the IonBank mortgage (see DL-2026-06-10-A). It also left three
+surfaces free to drift: the `monthly_cashflow_summary` SQL view, the Python
+monthly summary path, and any annual rollup each carried their own notion of
+what counts as spend.
+
+**Decision.** Move all three to one shared, *category*-driven definition.
+`outflow` = `fixed_obligation` + discretionary (`variable_lifestyle` /
+`medical` / `abnormal`), gated by `direction != 'inflow'`. Because spend is now
+selected by category rather than by direction, the transfer-tagged IonBank
+mortgage is correctly included in spend, and the SQL view, the Python monthly
+path, and the annual rollup compute the same number by construction.
+
+Added two **additive** MCP tools alongside the monthly pair —
+`compute_annual_summary` (pure dict) and `generate_annual_summary` (renders +
+writes markdown). Each month in the annual rollup reconciles field-for-field to
+`compute_monthly_summary`; existing tool signatures were untouched. This is a
+**read-side-only migration** (PR #29) — the `monthly_cashflow_summary` view and
+the summary code changed; no transaction rows were rewritten.
+
+**Alternatives considered.**
+
+- *Keep the direction basis and special-case IonBank in the view.* Rejected. A
+  one-off exception in SQL would have to be mirrored in the Python and annual
+  paths too — the same divergence risk this decision closes.
+- *Build the annual rollup on its own spend definition.* Rejected. Field-for-field
+  reconciliation to the monthly summary is only guaranteed if both share one
+  definition.
+
+---
+
+## 2026-06-10 — Stale YTD-era partial reconciliation rows purged (DL-2026-06-10-C)
+
+**Context.** Partial Beacon and Webster rows covering 2026-05-01 → 05-17,
+left over from the earlier YTD-import era, survived the move to monthly imports.
+They overlapped the re-imported monthly data and double-counted against it,
+distorting the May reconciliation and spend totals.
+
+**Decision.** Purge the stale 2026-05-01 → 05-17 Beacon/Webster rows so the
+monthly imports are the single source for that window. The database was backed
+up before the deletion. This is a data-cleanup decision, not a schema or tool
+change — the re-imported monthly rows already carry the same transactions.
+
+---
+
+## 2026-06-10 — Income rules must be direction-safe (DL-2026-06-10-B)
+
+**Context.** The `FID BKG SVC LLC MONEYLINE` pattern shows up on both sides of
+the ledger: inbound Fidelity RSU proceeds and a recurring outbound $15×4/mo
+brokerage contribution. A single direction-agnostic rule classified both legs
+identically, so contributions could be booked as income (or income as a
+contribution) depending only on which rule won.
+
+**Decision.** Split the MoneyLine rule into two direction-filtered rules: an
+inflow leg → `income/rsu_proceeds`, and an outflow leg → `investment/brokerage`
+(`rule-fidelity-moneyline-outflow`), confidence high. Generalized as a standing
+rule: any income / RSU classification rule must carry a `direction_filter`, so
+it can never accidentally tag an outflow as income. This resolves the
+Fidelity MoneyLine medium-confidence item carried in PROJECT_STATUS.
+
+**Alternatives considered.**
+
+- *Disambiguate by amount.* Rejected. Amount-based heuristics are brittle and
+  break the moment a contribution amount or an RSU proceeds figure shifts;
+  direction is the durable signal.
+
+---
+
+## 2026-06-10 — IonBank is the home mortgage, not an uningested transfer partner (DL-2026-06-10-A)
+
+**Context.** The `IonBank ONLINE XFR` rows on Beacon (18 rows, $35,183.19) had
+been treated as an uningested transfer partner — assumed to be another owned
+account whose CSV simply hadn't arrived yet — because the Beacon parser stamps
+them `direction = 'transfer'` (one of its six transfer regexes). Investigation
+confirmed IonBank is the household's home-mortgage servicer (and a HELOC being
+paid off June/July 2026), not an owned liquid account. There is no counterpart
+CSV and never will be.
+
+**Decision.** Classify every `IonBank ONLINE XFR` row as
+`fixed_obligation/mortgage/joint/recurring` via rule `rule-ionbank-mortgage`
+(priority 10, `direction_filter = 'transfer'` to match the parser-stamped
+direction). These rows are spending, not transfers, and must never be
+"fixed" back into transfer pairing. Removed from the unpaired-transfer
+diagnostic surface. The downstream consequence — that direction-based spend
+math would otherwise exclude them — is what motivated DL-2026-06-15.
+
+**Alternatives considered.**
+
+- *Re-pair them as transfers once the "other side" arrives.* Rejected. There is
+  no owned counterpart account; the other side is the mortgage servicer.
+- *Leave them unclassified pending a CSV.* Rejected. The CSV will never arrive,
+  and the rows are unambiguously the home-mortgage payment.
+
+---
+
 ## 2026-06-01 — Classification-first UI (Classify view, register filters/search/bulk, taxonomy fixes)
 
 **Context.** The desktop app booted into Source Intake, and the only
