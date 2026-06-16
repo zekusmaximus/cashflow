@@ -5,12 +5,16 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-06-01 (classification-first UI shipped: default Classify view, register category/account/search filters + unclassified-count pill, bulk apply, `business_expense`/`lifecycle` editor fixes; UI rule capture via Python classifier sidecar with manual-rule priority band 6–9 and the `manual_override_applied` stamp fix. Stress-test caveat: override-protection backfill missed 20 rows — see Known issues.)
+**Last updated:** 2026-06-16 (state reconciled against the watch-root canonical
+files `STATUS.md` / `DECISIONS.md`, which govern on any conflict: IonBank
+reclassified as the home-mortgage payee per DL-2026-06-10-A, snapshot counts and
+classifier coverage refreshed, spend basis moved from direction to category per
+DL-2026-06-15, and two annual-summary MCP tools added.)
 
 ## Snapshot
 
-End-to-end spending-first pipeline works for four account types: drop a
-Chase, Beacon, Ally HYSA, or Webster (Ashley) CSV in the watch root, the
+End-to-end spending-first pipeline works for five account types: drop a
+Chase, Beacon, Ally HYSA, Webster (Ashley), or Citi CSV in the watch root, the
 Tauri app auto-matches core sources and later context, the dashboard
 reflects real numbers, and Claude Cowork / Claude Desktop can call the MCP
 server's tools to ingest, pair transfers, analyze monthly and annual
@@ -20,8 +24,9 @@ Liquidity Gate MCP is attached. Real-DB
 run on 2026-05-17 produced 31 cross-account pairs
 (including the 5×5 Webster → Beacon cluster on 2026-01-21, which the
 connected-components fallback retires deterministically) and 12 fresh
-Chase rows from the same-day dedup recovery. ~1,144 transactions now
-in the local SQLite (936 Chase + 137 Beacon + 19 Ally + 52 Webster).
+Chase rows from the same-day dedup recovery. 1,267 transactions now in the
+local SQLite across five fully-ingested accounts — Chase 1,036 · Beacon 146 ·
+Webster 56 · Ally 19 · Citi 10 — covering 2025-12-30 → 2026-05-29.
 
 Scope revision phases 0-3 are complete: docs, Cowork prompts, tracker
 priorities, and the intake UI now treat core transaction feeds as the
@@ -33,18 +38,18 @@ Durable transaction overrides are now live and validated: Cowork can store
 payee/category/role/lifecycle fixes that survive a future YTD-to-monthly
 re-import for the same logical transaction.
 
-Rule-based classifier is at 86.7% coverage: 130 rules, 992 of 1,144
-transactions classified. Two Cowork sessions on 2026-05-18 built the full
-rule set — first pass (10 rules, 53%) plus a second pass (113 new rules)
-covering all known targets: Zara, Sephora, French Cleaners, Servomation,
-Google One, Venmo, Mobile Check Dep, streaming, subscriptions, utilities,
-retail, dining, fuel, pet, services, advertising, travel, entertainment,
-donations, tax, insurance, loans, and property fees. Two catchall rules
-(`rule-sp-catchall`, `rule-square-prefix-catchall`) absorb future
-SP*/SQ* long-tail merchants automatically. 152 rows remain unclassified
-(15 inflows, 137 single-occurrence small-merchant outflows) — pushing
-above 90% would require per-merchant rules or manual overrides that don't
-materially improve spending analytics.
+Rule-based classifier now has **zero unclassified rows** — 100% coverage
+within the closed vocabulary — across **146 classification rules**. Two Cowork
+sessions on 2026-05-18 built the bulk of the rule set (first pass 10 rules,
+second pass 113 new rules) covering all known targets: Zara, Sephora, French
+Cleaners, Servomation, Google One, Venmo, Mobile Check Dep, streaming,
+subscriptions, utilities, retail, dining, fuel, pet, services, advertising,
+travel, entertainment, donations, tax, insurance, loans, and property fees.
+Two catchall rules (`rule-sp-catchall`, `rule-square-prefix-catchall`) absorb
+future SP*/SQ* long-tail merchants automatically. Classification has reached
+the single-occurrence long-tail floor: per-merchant rule work is closed, and
+the focus now is monthly/annual spending analysis rather than chasing
+coverage.
 
 Cowork integration optimized 2026-05-18: `docs://project-status` MCP resource
 added (4 resources total), classifier and override tools wired into the
@@ -57,8 +62,14 @@ identified Cowork deficiencies resolved.
 remaining categories; `unpaired-transfer-diagnostics` in auto-memory has
 full row-level detail:
 
-1. **IonBank ONLINE XFR (~14 Beacon rows)** — partner account not yet
-   ingested. Resolved when the other IonBank account's CSV arrives.
+1. **IonBank ONLINE XFR (18 rows, $35,183.19)** — **not** an uningested
+   transfer partner. IonBank is the household's home-mortgage payee (and a
+   HELOC being paid off June/July 2026), not an owned liquid account. Per
+   DL-2026-06-10-A, every `IonBank ONLINE XFR` row is classified
+   `fixed_obligation/mortgage/joint/recurring` via rule `rule-ionbank-mortgage`
+   (priority 10, `direction_filter='transfer'` because the parser stamps these
+   `direction=transfer`). These are spending, not transfers, and must never be
+   "fixed" back into transfer pairing.
 2. **Multi-leg same-day Webster/Beacon ambiguity (4 + 4 rows on 2/25,
    2/27, 4/3, 4/6)** — same amount on multiple legs with mixed clearing
    delays. Algorithm can't deterministically choose without
@@ -70,6 +81,15 @@ unpaired Ally HYSA `Requested transfer from …` rows as `direction='inflow'`
 after the pairing pass. The three affected rows ($4,500 on 2026-01-05,
 $5,080 on 2026-04-08, $1,000 on 2026-05-08) will be corrected on the next
 `pair_transfers` call.
+
+**Spend basis is category-driven, not direction-driven (PR #29,
+DL-2026-06-15).** The `monthly_cashflow_summary` SQL view, the Python monthly
+path, and the new annual rollup now share one definition: `outflow` =
+`fixed_obligation` + discretionary (`variable_lifestyle` / `medical` /
+`abnormal`) with a `direction != 'inflow'` guard. Because spend is selected by
+category rather than by `direction`, the transfer-tagged IonBank mortgage
+(item 1 above) is correctly included in spend end-to-end — which is what keeps
+the monthly view, the Python summary, and the annual bridge consistent.
 
 **UI interactivity sprint landed (2026-05-19):** the app is now the primary
 day-to-day maintenance surface for routine cleanup; Cowork is reserved for
@@ -165,6 +185,14 @@ placeholders — the server logs a warning at startup until they are populated
 from the latest Novartis paystub; generation is not blocked, but the
 theoretical savings-rate view is untrustworthy until then.
 
+**Annual spend-bridge rollup (2026-06-15):** two additive MCP tools —
+`compute_annual_summary` (pure, returns the structured dict) and
+`generate_annual_summary` (renders + writes the markdown) — roll the monthly
+bridges up into a year view. Each month in the rollup reconciles field-for-field
+to `compute_monthly_summary`, and the annual path shares the same
+category-driven spend definition as the monthly view (see "Spend basis" above),
+so the two can never diverge. Existing tool signatures were untouched (DL-2026-06-15).
+
 ## Architecture (one-screen reminder)
 
 Two local folders matter:
@@ -185,7 +213,7 @@ Tauri desktop app  (npm run tauri dev)
   └─ @tauri-apps/plugin-sql reads/writes the shared DB
 
 Python MCP server  (launched by Claude Desktop subprocess)
-  └─ 7 tools, 4 resources, 1 prompt
+  └─ 20 tools, 4 resources, 1 prompt
   └─ Same DB, write connection separate from read-only query connection
 
 Claude Cowork / Claude Desktop analyst project
@@ -257,7 +285,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Unpaired Ally HYSA `Requested transfer from …` rows auto-reclassified as `direction='inflow'` after the pairing pass (`ally_inbound_reclassified` reported in `PairTransfersResult`)
 
 ### MCP integration
-- [x] 18 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`, `upsert_balance_checkpoint`, `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`, `refresh_hysa_gate`, `compute_monthly_summary`, `generate_monthly_summary`, `ingest_check_register`, `ingest_check_deposit_ledger`, `list_lifecycle_audit_candidates`, `get_annual_reference`
+- [x] 20 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`, `upsert_balance_checkpoint`, `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`, `refresh_hysa_gate`, `compute_monthly_summary`, `generate_monthly_summary`, `compute_annual_summary`, `generate_annual_summary`, `ingest_check_register`, `ingest_check_deposit_ledger`, `list_lifecycle_audit_candidates`, `get_annual_reference`
 - [x] 4 resources: `docs://master-index`, `docs://tracker`, `docs://project-status`, `watch://recent-events`
 - [x] 1 spending-first prompt: `financial_detective`
 - [x] Wired to Claude Desktop via [`%APPDATA%\Claude\claude_desktop_config.json`](https://docs.anthropic.com)
@@ -420,6 +448,16 @@ normal use of the repo for transaction-based spending analysis.
 - [x] **Three Ally HYSA inbound transfers have no Beacon counterpart — resolved.** $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). `pair_transfers` now auto-reclassifies unpaired Ally HYSA inbound-from rows as `direction='inflow'`; these three rows will be corrected on the next tool run. The 1/5 row is confirmed as Jeff's bonus check deposit; origin of the 4/8 and 5/8 rows is still unconfirmed but both are correctly treated as inflows.
 - [ ] **Check register + deposit ledger templates need to be filled in.** Templates ship in [server/templates/](../server/templates/); copy `check_register.template.csv` → `<watch_root>/check_register.csv` and `check_deposits.template.csv` → `<watch_root>/check_deposits.csv`, fill them in, then run `ingest_check_register` / `ingest_check_deposit_ledger` from a Cowork session. Until done, the eight outbound check rows (series 179–182 and 209–212) and nine `MOBILE CHECK DEP` rows remain blind-classified.
 - [ ] **UI "Import Check Register" button deferred.** Tauri has no MCP transport today; ledger imports happen via Cowork. See [DECISION_LOG.md](DECISION_LOG.md) entry from 2026-05-27.
+- [x] **Fidelity MoneyLine medium-confidence item — RESOLVED 2026-06-10.** The
+  `FID BKG SVC LLC MONEYLINE` $15×4/mo debits are confirmed brokerage
+  contributions: classified `investment/brokerage`, confidence high, via rule
+  `rule-fidelity-moneyline-outflow`. DL-2026-06-10-B split the old
+  direction-agnostic MoneyLine rule into an inflow leg (income / `rsu_proceeds`)
+  and this outflow leg, so RSU proceeds and contributions no longer collide.
+- [ ] **Remaining source intake (per DL-2026-06-03-A).** Still outstanding:
+  2026 rent payment history, the HSA debit-card CSV, trash / lawn / cleaning
+  invoices, and major medical / dental / vet bills. These are later-context
+  enrichment layers, not baseline blockers for spending analysis.
 - [ ] **Medium-confidence classifications to confirm** (flagged by second classifier pass, 2026-05-18):
   - Render, Supabase, Namecheap, GitHub, Roll20, OpenAI — currently `fixed_obligation/subscriptions_apps` (Jeff). Flip to `business_expense` if used for professional/author work.
   - PayLease / GW Management (10 rows, ~$10K+/yr) — currently `fixed_obligation/property_fees`. Confirm: primary-residence HOA, rental HOA, or rental management fees. Rental category may be more accurate.
