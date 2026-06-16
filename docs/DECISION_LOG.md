@@ -106,6 +106,72 @@ math would otherwise exclude them — is what motivated DL-2026-06-15.
 
 ---
 
+*The seven entries below were recovered from session memory during the
+2026-06-09 audit; reconciled into this log 2026-06-16.*
+
+## 2026-06-03 — Pet context (DL-2026-06-03-B)
+
+**Decision.** Macaroni, Rigatoni, and Cannoli are the family dogs; the Feb 2026
+$2,775 Venmo was Macaroni's adoption fee. "Berkshire Bank" and "Beacon" are the
+same institution — Berkshire was renamed Beacon in the acquisition.
+
+---
+
+## 2026-06-03 — Intake checklist closures (DL-2026-06-03-A)
+
+**Decision.** Closed out the source-intake checklist. *Not needed* (the feed
+already covers them at high confidence): Venmo/PayPal/Zelle history,
+Amazon/Instacart exports, and all subscription/utility documentation. *Out of
+scope* (planning references, not transaction sources): insurance, tax, and most
+rental documents. Dog grooming/daycare/boarding is *resolved* via Venmo
+overrides (`household_role: pet`). Still open: 2026 rent payment history, the
+HSA debit-card CSV, trash/lawn/cleaning invoices, and major medical/dental/vet
+bills.
+
+---
+
+## 2026-06-02 — Override protection is tuple-matched (DL-2026-06-02-A)
+
+**Decision.** Durable overrides are protected by matching the tuple
+(account + date + amount + `description_raw`), never the SHA-256 `match_key`;
+`apply_classifier` self-protects on that tuple. This refines the
+2026-06-01 "UI rule capture / override-stamp fix" entry below (whose backfill's
+first cut missed 20 rows) — see that entry for the full narrative.
+
+---
+
+## 2026-06-01 — Intraday terminal-row fix shipped (DL-2026-06-01-A)
+
+**Decision.** Shipped the intraday terminal-row fix
+(`reconstruct_intraday_chain`); Beacon/Webster Jan–May variance is now 0.00.
+Seed anchors live at 2026-01; never chain across the seed boundary.
+
+---
+
+## 2026-05-31 — Monthly files are canon (DL-2026-05-31-C)
+
+**Decision.** All five accounts migrated from YTD to monthly CSVs; the YTD
+batches were cleared. Never re-ingest an overlapping alternate format without
+clearing the superseded batch first.
+
+---
+
+## 2026-05-31 — Credit-card balance reconciliation skipped (DL-2026-05-31-B)
+
+**Decision.** Chase/Citi card-balance reconciliation is low-value (spending =
+the charges), so it is intentionally skipped; `[statement_closings.chase]` is
+intentionally left empty.
+
+---
+
+## 2026-05-31 — Opening anchors corrected (DL-2026-05-31-A)
+
+**Decision.** Corrected the opening anchors in `balances.toml`: Beacon
+Dec-31-2025 seed = 10,684.54, Webster = 1,123.39 — both CSV-back-derived. Do
+not replace these with guessed numbers.
+
+---
+
 ## 2026-06-01 — Classification-first UI (Classify view, register filters/search/bulk, taxonomy fixes)
 
 **Context.** The desktop app booted into Source Intake, and the only
