@@ -1,0 +1,62 @@
+# balances.template.toml — opening balances, statement closings, wealth-bridge
+# config, and the mortgage amortization block.
+#
+# Copy this file to <watch_root>/balances.toml and fill in the values. Every
+# section is optional: the loader (liquidity_gate_mcp.balances.load_balances) is
+# tolerant of a missing file or a missing section, so an older config still runs
+# — it simply degrades the feature that section drives.
+
+# Anchor balances at 2025-12-31, keyed by accounts.id OR by institution alias
+# (chase / beacon / ally / webster). Used by the computed-balance view as the
+# starting point for each account.
+[opening_balances]
+# "acct-beacon-1234" = 16903.06
+# chase   = 3982.41
+# ally    = 3113.44
+# webster = 6933.12
+
+# Known statement closing balances, one table per account, keyed by period-end
+# ISO date. Only accounts whose CSVs lack running-balance metadata normally need
+# these (typically Chase and Ally).
+# [statement_closings.chase]
+# "2026-01-31" = 4521.07
+# "2026-02-28" = 4112.55
+
+# Config-sourced figures for the monthly/annual cashflow bridge's theoretical
+# savings-rate view. Only as accurate as these values — populate the 401(k)
+# figures from the latest Novartis paystub (they ship as 0 placeholders and the
+# server warns until set).
+[wealth_bridge]
+gross_household_income_annual  = 512000.0
+gross_household_income_monthly = 42667.0
+jeff_401k_monthly              = 0.0
+ashley_401k_monthly            = 0.0
+hsa_monthly                    = 583.0
+hysa_target                    = 80000.0
+savings_rate_target_pct        = 22.0
+discretionary_ceiling_monthly  = 19000.0
+hysa_floor_monthly_delta       = 2500.0
+savings_rate_floor_pct         = 18.0
+abnormal_flag_threshold        = 3000.0
+monthly_summary_output_dir     = "monthly_summaries"
+
+# Mortgage amortization for the net_consumption / mortgage_principal carve-out.
+# The scheduled IonBank payment is booked whole to fixed_obligation, but only the
+# interest + escrow portion is real consumption — the principal is balance-sheet-
+# neutral debt paydown (saving). This block lets the summary carve the principal
+# out of net_consumption WITHOUT reclassifying any transaction row.
+#
+# The block is optional: if absent, mortgage_principal's scheduled portion is 0
+# and amortization is skipped, but non-scheduled IonBank debt-paydown rows (the
+# paid-off HELOC + extra-principal prepayments) are still carved out.
+#
+# Anchored to the 2026-06-17 Ion statement; any other month's principal split is
+# rolled deterministically from the anchor balance.
+[mortgage.ion]
+merchant_match         = "IonBank Mortgage"  # matches transactions.merchant_normalized
+scheduled_payment      = 4044.66             # the recurring monthly mortgage row
+principal_and_interest = 2611.83             # P&I portion of the scheduled payment
+escrow                 = 1432.83             # taxes+insurance portion (payment - P&I)
+annual_rate            = 0.04625             # 4.625%, fixed until Aug 2032
+anchor_date            = "2026-06-17"        # statement date
+anchor_balance         = 475016.69           # outstanding principal at anchor_date

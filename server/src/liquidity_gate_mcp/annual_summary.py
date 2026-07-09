@@ -22,10 +22,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .balances import WealthBridgeConfig
+from .balances import MortgageConfig, WealthBridgeConfig
 from .database import DatabaseManager
 from .models import AnnualReferenceEntry
 from .monthly_summary import DISCRETIONARY_CATEGORIES, compute_monthly_summary
+
+# New net-consumption fields rolled up alongside the frozen spend bridge. Kept in
+# a separate `consumption` per-month block + `consumption_totals` so the original
+# `totals` dict (income/fixed_obligations/discretionary/net_fcf) stays exactly as
+# it was — the DL-2026-06-15 reconciliation and its exact-shape tests are
+# untouched. Each field is the column-wise sum of the monthly `consumption`
+# section, so the annual view reconciles field-for-field to the monthly path.
+CONSUMPTION_FIELDS: tuple[str, ...] = (
+    "earned_income",
+    "reimbursements",
+    "reimbursements_income_side",
+    "reimbursements_spend_side",
+    "mortgage_principal",
+    "mortgage_principal_scheduled",
+    "debt_paydown_nonscheduled",
+    "net_consumption",
+)
 
 # Categories intentionally outside the spend bridge (kept in lockstep with the
 # monthly path and the monthly_cashflow_summary view). The category_breakdown
@@ -46,6 +63,7 @@ def compute_annual_summary(
     wealth_bridge: WealthBridgeConfig,
     year: int,
     annual_reference: AnnualReferenceEntry | None = None,
+    mortgage: MortgageConfig | None = None,
 ) -> dict[str, Any]:
     """Compute the year's spend bridge as a per-month series plus annual totals.
 
@@ -90,34 +108,50 @@ def compute_annual_summary(
 
     months: list[dict[str, Any]] = []
     totals = {"income": 0.0, "fixed_obligations": 0.0, "discretionary": 0.0, "net_fcf": 0.0}
+    consumption_totals = {key: 0.0 for key in CONSUMPTION_FIELDS}
     for label in present_labels:
         month = int(label[5:7])
         monthly = compute_monthly_summary(
-            database, wealth_bridge, year, month, annual_reference=annual_reference
+            database,
+            wealth_bridge,
+            year,
+            month,
+            annual_reference=annual_reference,
+            mortgage=mortgage,
         )
         fcf = monthly["fcf_transactions"]
+        consumption = monthly["consumption"]
         row = {
             "month": label,
             "income": fcf["inflows"],
             "fixed_obligations": fcf["fixed_obligations"],
             "discretionary": fcf["discretionary"],
             "net_fcf": fcf["net_fcf"],
+            "consumption": {key: consumption[key] for key in CONSUMPTION_FIELDS},
         }
         months.append(row)
         for key in totals:
             totals[key] += row[key]
+        for key in CONSUMPTION_FIELDS:
+            consumption_totals[key] += consumption[key]
 
     totals = {key: round(value, 2) for key, value in totals.items()}
+    consumption_totals = {key: round(value, 2) for key, value in consumption_totals.items()}
 
     return {
         "year": year,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "months": months,
         "totals": totals,
+        "consumption_totals": consumption_totals,
         "category_breakdown": category_breakdown,
         "methodology": {
             "discretionary_categories": list(DISCRETIONARY_CATEGORIES),
             "spend_definition": "fixed_obligation + discretionary, direction != 'inflow'",
+            "net_consumption_definition": (
+                "fixed_obligation + discretionary − reimbursements − "
+                "mortgage_principal (additive; net_fcf and gross lines unchanged)"
+            ),
             "excluded_categories": list(EXCLUDED_CATEGORIES),
         },
     }
@@ -129,6 +163,7 @@ def generate_annual_summary(
     year: int,
     output_root: Path,
     annual_reference: AnnualReferenceEntry | None = None,
+    mortgage: MortgageConfig | None = None,
 ) -> dict[str, Any]:
     """Compute the annual summary, render + write the markdown, return the dict.
 
@@ -141,7 +176,11 @@ def generate_annual_summary(
     from .annual_summary_renderer import write_annual_summary
 
     summary = compute_annual_summary(
-        database, wealth_bridge, year, annual_reference=annual_reference
+        database,
+        wealth_bridge,
+        year,
+        annual_reference=annual_reference,
+        mortgage=mortgage,
     )
     markdown_path, manual_preserved = write_annual_summary(
         summary, output_root, wealth_bridge.monthly_summary_output_dir
