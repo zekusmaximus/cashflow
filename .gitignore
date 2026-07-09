@@ -24,3 +24,16 @@ server/uv.lock
 *.db
 *.db-shm
 *.db-wal
+
+# Never commit real financial data. Ignore all CSVs by default…
+*.csv
+# …but allow the repo's legitimate tracked CSVs (test/template/tracker data only):
+!server/tests/**/*.csv
+!server/templates/*.csv
+!docs/*.csv
+# Set-aside inputs never belong in the repo:
+_superseded_inputs/
+
+# Build debris that should never have been committed:
+.tmp/
+*.timestamp-*.mjs
