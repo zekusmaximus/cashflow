@@ -105,6 +105,7 @@ def render_markdown(summary: dict[str, Any], manual_body: str) -> str:
     hysa = summary["hysa"]
     fcf_t = summary["fcf_transactions"]
     fcf_h = summary["fcf_theoretical"]
+    consumption = summary["consumption"]
     spend = summary["spend"]
     methodology = summary["methodology"]
     auto_flags = summary["flags"]["auto"]
@@ -167,6 +168,27 @@ project — both this file and the structured JSON come from one compute pass._
 Implied withholding is implied from the gap between the gross config and
 actual payroll deposits — `gross − tax_advantaged − payroll_inflows`.
 
+### Net-consumption view — true consumption (additive)
+
+> Strictly additive over the transactions view: `inflows`, `fixed_obligations`,
+> `discretionary` and `net_fcf` are unchanged. These lines net out
+> reimbursements and carve the mortgage principal (debt paydown, not spending)
+> out of consumption. `net_consumption` is the true-spending companion to
+> `net_fcf`.
+
+| Metric | Amount |
+| --- | ---: |
+| Earned income (income less reimbursements) | {_money(consumption['earned_income'])} |
+| Reimbursements / refunds (offsets) | {_money(consumption['reimbursements'])} |
+| Mortgage principal (debt paydown, carved out) | {_money(consumption['mortgage_principal'])} |
+| &nbsp;&nbsp;• scheduled (amortized) | {_money(consumption['mortgage_principal_scheduled'])} |
+| &nbsp;&nbsp;• non-scheduled (HELOC + prepayments) | {_money(consumption['debt_paydown_nonscheduled'])} |
+| **Net consumption** | **{_money(consumption['net_consumption'])}** |
+
+Net consumption = fixed_obligations + discretionary − reimbursements −
+mortgage_principal. Escrow and interest of the mortgage payment stay in
+consumption; only loan principal is carved out.
+
 ## 3. Spend Narrative
 
 - **This month's discretionary spend:** {_money(spend['this_month_discretionary'])}
@@ -195,6 +217,12 @@ actual payroll deposits — `gross − tax_advantaged − payroll_inflows`.
   {methodology['discretionary_categories']}. Transfers, taxes,
   fixed_obligation, investment, rental, business_expense and income are
   excluded by definition.
+- **Net consumption:** `fixed_obligations + discretionary − reimbursements −
+  mortgage_principal`, all derived from existing rows — no reclassification.
+  Reimbursements = `income` reimbursement/refund subcategories plus in-category
+  refund inflows (`tax_refund` is excluded — it belongs to a tax view). Mortgage
+  principal = config-amortized scheduled principal plus non-scheduled IonBank
+  debt-paydown rows. `net_fcf` and the gross spend lines are untouched.
 - **HYSA monthly delta:** net change in the HYSA account balance from
   transactions in the target month, all categories included (account scope is
   the filter — inbound transfers count positively as the savings mechanism,

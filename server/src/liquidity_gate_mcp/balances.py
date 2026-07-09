@@ -68,6 +68,62 @@ DEFAULT_WEALTH_BRIDGE = WealthBridgeConfig(
 
 
 @dataclass(frozen=True)
+class MortgageConfig:
+    """Parsed ``[mortgage.ion]`` section of ``balances.toml``.
+
+    Drives the ``mortgage_principal`` debt-paydown carve-out in the monthly /
+    annual summary. The whole point is that a mortgage payment is part
+    consumption (interest + escrow) and part saving (principal — balance-sheet
+    neutral debt paydown). This config lets the summary amortize the principal
+    portion of the scheduled payment out of ``net_consumption`` without ever
+    reclassifying a transaction row.
+
+    Anchored to a single known statement (``anchor_date`` / ``anchor_balance``);
+    the balance for any other month is rolled deterministically from the anchor
+    — forward with the standard amortization recurrence, backward with its
+    inverse — so the same month always produces the same principal split.
+    """
+
+    merchant_match: str
+    scheduled_payment: float
+    principal_and_interest: float
+    escrow: float
+    annual_rate: float
+    anchor_date: date
+    anchor_balance: float
+
+    def amortized_principal(self, year: int, month: int) -> float:
+        """Principal portion of the scheduled payment posted in ``year``/``month``.
+
+        Rolls the outstanding balance from ``anchor_date`` to the start of the
+        target month, then splits that month's P&I payment:
+        ``interest = balance * annual_rate/12``; ``principal = P&I - interest``.
+
+        The anchor balance is defined as the balance *from which the anchor
+        month's own payment is computed*, so a target month equal to the anchor
+        month uses ``anchor_balance`` directly. Forward months apply the
+        recurrence ``next = balance - principal``; backward months invert it as
+        ``prev = (balance + P&I) / (1 + r)``.
+        """
+        rate = self.annual_rate / 12.0
+        anchor_index = self.anchor_date.year * 12 + (self.anchor_date.month - 1)
+        target_index = year * 12 + (month - 1)
+        delta = target_index - anchor_index
+
+        balance = self.anchor_balance
+        if delta > 0:
+            for _ in range(delta):
+                interest = balance * rate
+                balance -= self.principal_and_interest - interest
+        elif delta < 0:
+            for _ in range(-delta):
+                balance = (balance + self.principal_and_interest) / (1.0 + rate)
+
+        interest = balance * rate
+        return round(self.principal_and_interest - interest, 2)
+
+
+@dataclass(frozen=True)
 class BalancesConfig:
     """Parsed contents of ``balances.toml`` in the watch root.
 
@@ -80,12 +136,18 @@ class BalancesConfig:
     Keys are matched against the DB by exact ``accounts.id`` first, then
     by case-insensitive institution alias (``chase``, ``beacon``, ``ally``,
     ``webster``) so Jeff can edit the file without memorizing source_keys.
+
+    ``mortgage`` is ``None`` when the ``[mortgage.ion]`` block is absent (older
+    configs) — the summary then reports ``mortgage_principal = 0`` for the
+    scheduled portion and skips amortization, while still carving out any
+    non-scheduled IonBank debt-paydown rows.
     """
 
     accounts: dict[str, AccountBalances]
     source_path: Path
     loaded: bool
     wealth_bridge: WealthBridgeConfig
+    mortgage: MortgageConfig | None = None
 
     def lookup(
         self,
@@ -153,6 +215,32 @@ def _parse_wealth_bridge(section: dict) -> WealthBridgeConfig:
     )
 
 
+def _parse_mortgage(section: dict) -> MortgageConfig | None:
+    """Build a ``MortgageConfig`` from a raw ``[mortgage.ion]`` table.
+
+    Returns ``None`` when the section is absent or missing a required numeric
+    key — a stale file written before this block existed still yields a usable
+    config (mortgage carve-out simply degrades to the non-scheduled rows only).
+    ``merchant_match`` / ``escrow`` fall back to sane defaults; the amortization
+    inputs (payment, P&I, rate, anchor) are required, so a malformed block is
+    treated as absent rather than silently amortizing off garbage.
+    """
+    if not section:
+        return None
+    try:
+        return MortgageConfig(
+            merchant_match=str(section.get("merchant_match", "IonBank Mortgage")).strip(),
+            scheduled_payment=float(section["scheduled_payment"]),
+            principal_and_interest=float(section["principal_and_interest"]),
+            escrow=float(section.get("escrow", 0.0)),
+            annual_rate=float(section["annual_rate"]),
+            anchor_date=date.fromisoformat(str(section["anchor_date"])),
+            anchor_balance=float(section["anchor_balance"]),
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
 def load_balances(watch_root: Path) -> BalancesConfig:
     path = watch_root / "balances.toml"
     if not path.exists():
@@ -161,6 +249,7 @@ def load_balances(watch_root: Path) -> BalancesConfig:
             source_path=path,
             loaded=False,
             wealth_bridge=DEFAULT_WEALTH_BRIDGE,
+            mortgage=None,
         )
 
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -187,9 +276,12 @@ def load_balances(watch_root: Path) -> BalancesConfig:
             statement_closings=closings,
         )
 
+    mortgage_section = (raw.get("mortgage") or {}).get("ion", {}) or {}
+
     return BalancesConfig(
         accounts=accounts,
         source_path=path,
         loaded=True,
         wealth_bridge=_parse_wealth_bridge(raw.get("wealth_bridge", {}) or {}),
+        mortgage=_parse_mortgage(mortgage_section),
     )

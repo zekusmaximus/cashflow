@@ -20,7 +20,7 @@ from liquidity_gate_mcp.annual_summary import (
     compute_annual_summary,
     generate_annual_summary,
 )
-from liquidity_gate_mcp.balances import WealthBridgeConfig
+from liquidity_gate_mcp.balances import MortgageConfig, WealthBridgeConfig
 from liquidity_gate_mcp.database import DatabaseManager
 from liquidity_gate_mcp.monthly_summary import compute_monthly_summary
 
@@ -69,6 +69,7 @@ def _insert_tx(
     primary_category: str,
     account_id: str = "acct-beacon-1234",
     subcategory: str | None = None,
+    merchant_normalized: str | None = None,
     description: str = "row",
 ) -> None:
     global _TX_COUNTER
@@ -87,7 +88,7 @@ def _insert_tx(
           primary_category, subcategory, household_role, lifecycle,
           transfer_group_key, statement_period, metadata_json
         ) VALUES (?, ?, 'batch-test', ?, 'seed.csv', ?, ?, ?,
-                  NULL, ?, ?, 'USD', ?, ?, 'joint', 'recurring', NULL, NULL, ?)
+                  ?, ?, ?, 'USD', ?, ?, 'joint', 'recurring', NULL, NULL, ?)
         """,
         (
             f"tx-{_TX_COUNTER}",
@@ -96,6 +97,7 @@ def _insert_tx(
             occurred_on.isoformat(),
             occurred_on.isoformat(),
             description,
+            merchant_normalized,
             amount,
             direction,
             primary_category,
@@ -287,10 +289,103 @@ def test_annual_methodology_records_the_spend_definition(
 def test_annual_empty_year_is_zeroed_not_null(database: DatabaseManager) -> None:
     annual = compute_annual_summary(database, _wealth_bridge(), 2099)
     assert annual["months"] == []
+    # The frozen spend-bridge totals keep their exact original shape.
     assert annual["totals"] == {
         "income": 0.0, "fixed_obligations": 0.0, "discretionary": 0.0, "net_fcf": 0.0,
     }
     assert annual["category_breakdown"] == []
+    # The additive net-consumption totals live in a separate dict, all zeroed.
+    assert set(annual["consumption_totals"]) == {
+        "earned_income", "reimbursements", "reimbursements_income_side",
+        "reimbursements_spend_side", "mortgage_principal",
+        "mortgage_principal_scheduled", "debt_paydown_nonscheduled", "net_consumption",
+    }
+    assert all(v == 0.0 for v in annual["consumption_totals"].values())
+
+
+def _ion_mortgage() -> MortgageConfig:
+    return MortgageConfig(
+        merchant_match="IonBank Mortgage",
+        scheduled_payment=4044.66,
+        principal_and_interest=2611.83,
+        escrow=1432.83,
+        annual_rate=0.04625,
+        anchor_date=date(2026, 6, 17),
+        anchor_balance=475016.69,
+    )
+
+
+def _seed_consumption_two_months(connection: sqlite3.Connection) -> None:
+    _seed_account(connection)
+    for month in (5, 6):
+        _insert_tx(connection, occurred_on=date(2026, month, 2), amount=10000.0,
+                   direction="inflow", primary_category="income", subcategory="payroll")
+        _insert_tx(connection, occurred_on=date(2026, month, 3), amount=400.0,
+                   direction="inflow", primary_category="income",
+                   subcategory="insurance_reimbursement")
+        _insert_tx(connection, occurred_on=date(2026, month, 4), amount=-2000.0,
+                   direction="outflow", primary_category="variable_lifestyle")
+        _insert_tx(connection, occurred_on=date(2026, month, 5), amount=-4044.66,
+                   direction="transfer", primary_category="fixed_obligation",
+                   subcategory="mortgage", merchant_normalized="IonBank Mortgage")
+        _insert_tx(connection, occurred_on=date(2026, month, 6), amount=-1000.00,
+                   direction="outflow", primary_category="fixed_obligation",
+                   merchant_normalized="IonBank Mortgage")
+    connection.commit()
+
+
+def test_annual_consumption_totals_are_column_sums_and_reconcile(
+    database: DatabaseManager,
+) -> None:
+    connection = database.connect()
+    try:
+        _seed_consumption_two_months(connection)
+    finally:
+        connection.close()
+
+    annual = compute_annual_summary(
+        database, _wealth_bridge(), 2026, mortgage=_ion_mortgage()
+    )
+    fields = list(annual["consumption_totals"])
+
+    running = {key: 0.0 for key in fields}
+    for row in annual["months"]:
+        year, month = int(row["month"][:4]), int(row["month"][5:7])
+        monthly = compute_monthly_summary(
+            database, _wealth_bridge(), year, month, mortgage=_ion_mortgage()
+        )
+        con = monthly["consumption"]
+        # Each annual month row mirrors the monthly consumption section exactly.
+        for key in fields:
+            assert row["consumption"][key] == pytest.approx(con[key], abs=0.01)
+            running[key] += con[key]
+
+    for key in fields:
+        assert annual["consumption_totals"][key] == pytest.approx(round(running[key], 2), abs=0.01)
+
+
+def test_annual_identity_holds_every_month(database: DatabaseManager) -> None:
+    connection = database.connect()
+    try:
+        _seed_consumption_two_months(connection)
+    finally:
+        connection.close()
+
+    annual = compute_annual_summary(
+        database, _wealth_bridge(), 2026, mortgage=_ion_mortgage()
+    )
+    for row in annual["months"]:
+        year, month = int(row["month"][:4]), int(row["month"][5:7])
+        monthly = compute_monthly_summary(
+            database, _wealth_bridge(), year, month, mortgage=_ion_mortgage()
+        )
+        fcf = monthly["fcf_transactions"]
+        con = monthly["consumption"]
+        lhs = round(con["earned_income"] - con["net_consumption"], 2)
+        rhs = round(
+            fcf["net_fcf"] + con["mortgage_principal"] + con["reimbursements_spend_side"], 2
+        )
+        assert lhs == pytest.approx(rhs, abs=0.01)
 
 
 def test_generate_annual_summary_writes_file_and_returns_path(

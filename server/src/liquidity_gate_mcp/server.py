@@ -383,7 +383,12 @@ def compute_monthly_summary(year: int, month: int) -> dict:
     annual = load_annual_reference(settings.watch_root)
     matching = next((e for e in annual.entries if e.year == year), None)
     return compute_monthly_summary_impl(
-        database, balances.wealth_bridge, year, month, annual_reference=matching
+        database,
+        balances.wealth_bridge,
+        year,
+        month,
+        annual_reference=matching,
+        mortgage=balances.mortgage,
     )
 
 
@@ -414,6 +419,7 @@ def generate_monthly_summary(year: int, month: int) -> dict:
         month,
         settings.watch_root,
         annual_reference=matching,
+        mortgage=balances.mortgage,
     )
 
 
@@ -432,7 +438,11 @@ def compute_annual_summary(year: int) -> dict:
     annual = load_annual_reference(settings.watch_root)
     matching = next((e for e in annual.entries if e.year == year), None)
     return compute_annual_summary_impl(
-        database, balances.wealth_bridge, year, annual_reference=matching
+        database,
+        balances.wealth_bridge,
+        year,
+        annual_reference=matching,
+        mortgage=balances.mortgage,
     )
 
 
@@ -455,6 +465,7 @@ def generate_annual_summary(year: int) -> dict:
         year,
         settings.watch_root,
         annual_reference=matching,
+        mortgage=balances.mortgage,
     )
 
 

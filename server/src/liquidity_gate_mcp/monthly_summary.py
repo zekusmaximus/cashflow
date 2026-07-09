@@ -20,6 +20,7 @@ scheduler lives in this server.
 from __future__ import annotations
 
 import calendar
+import logging
 import math
 import re
 import sqlite3
@@ -27,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .balances import WealthBridgeConfig
+from .balances import MortgageConfig, WealthBridgeConfig
 from .computed_balance import ALLY_HYSA_ACCOUNT_ID
 from .database import DatabaseManager
 from .models import AnnualReferenceEntry
@@ -43,6 +44,48 @@ from .monthly_summary_renderer import write_monthly_summary
 # The transfer/tax/fixed_obligation/investment/rental/business_expense/income
 # *categories* are still excluded by definition. Do not let this drift.
 DISCRETIONARY_CATEGORIES: tuple[str, ...] = ("variable_lifestyle", "medical", "abnormal")
+
+# Consumption offsets (reimbursements / refunds) — the reporting layer nets
+# these out of gross spend to expose true `net_consumption` WITHOUT touching any
+# transaction row or the frozen `net_fcf` (DL-2026-06-15). Two sources:
+#
+#   * income-side offsets: `income` inflows whose subcategory is a reimbursement
+#     or refund. These already sit in `inflows` (and therefore in `net_fcf` as
+#     income), so `earned_income` splits them back out of the income line.
+#   * spend-side offsets: inflow rows already correctly placed IN a spend
+#     category (in-category refunds). The existing gross buckets hold inflows
+#     out, so these never reached `net_fcf` at all.
+#
+# EXCLUDED from offsets by definition: payroll/paycheck/bonus/stock_sale/
+# interest/check_deposit (real income) and tax_refund (belongs to a tax view,
+# not a consumption offset — do not net return-of-overpaid-tax here).
+INCOME_OFFSET_SUBCATEGORIES: tuple[str, ...] = (
+    "insurance_reimbursement",
+    "reimbursement",
+    "refund",
+)
+SPEND_OFFSET_CATEGORIES: tuple[str, ...] = (
+    "variable_lifestyle",
+    "medical",
+    "abnormal",
+    "fixed_obligation",
+)
+
+# Scheduled-mortgage identification tolerance. The scheduled payment amount is
+# matched within ±$50 of `scheduled_payment` so a future escrow re-analysis that
+# nudges the payment does not silently drop the row (audit open question:
+# "escrow drift"). Rows outside the tolerance are treated as non-scheduled
+# IonBank debt paydown (the paid-off HELOC + irregular extra-principal
+# prepayments — all historical Jan–Jun 2026).
+_MORTGAGE_MATCH_TOLERANCE = 50.0
+
+# Used only when the `[mortgage.ion]` config block is absent: still identify and
+# carve out non-scheduled IonBank debt-paydown rows, but skip amortization (the
+# scheduled principal portion is 0 without an anchor balance + rate).
+_FALLBACK_MORTGAGE_MERCHANT = "IonBank Mortgage"
+_FALLBACK_SCHEDULED_PAYMENT = 4044.66
+
+logger = logging.getLogger("liquidity_gate_mcp")
 
 # Top-mover filter thresholds (Section 3). Existing merchant: prior-month total
 # must be >= $100 AND abs(delta) >= $200. New merchant (no prior spend): this
@@ -297,6 +340,138 @@ def _discretionary_sum(connection: sqlite3.Connection, start: str, end: str) -> 
     )
 
 
+def _income_offset_sum(connection: sqlite3.Connection, start: str, end: str) -> float:
+    """Income-side consumption offsets over [start, end).
+
+    ``income`` inflows whose subcategory is a reimbursement/refund
+    (``INCOME_OFFSET_SUBCATEGORIES``). These are a subset of ``_income_inflows``;
+    ``_earned_income`` subtracts them to split the income line, and
+    ``_reimbursements`` adds them to the total offset sum. The underlying rows
+    are never modified — this is a reporting split only.
+    """
+    placeholders = ",".join("?" * len(INCOME_OFFSET_SUBCATEGORIES))
+    return _scalar(
+        connection,
+        f"SELECT COALESCE(SUM(ABS(amount)), 0) AS v FROM transactions "
+        f"WHERE primary_category = 'income' AND direction = 'inflow' "
+        f"AND subcategory IN ({placeholders}) "
+        f"AND occurred_on >= ? AND occurred_on < ?",
+        (*INCOME_OFFSET_SUBCATEGORIES, start, end),
+    )
+
+
+def _spend_offset_sum(connection: sqlite3.Connection, start: str, end: str) -> float:
+    """Spend-side consumption offsets over [start, end).
+
+    Inflow rows already correctly placed IN a spend category
+    (``SPEND_OFFSET_CATEGORIES``) — in-category refunds. The existing gross
+    buckets hold inflows out, so these never entered ``net_fcf``; the reporting
+    layer nets them against consumption via ``_reimbursements``.
+    """
+    placeholders = ",".join("?" * len(SPEND_OFFSET_CATEGORIES))
+    return _scalar(
+        connection,
+        f"SELECT COALESCE(SUM(ABS(amount)), 0) AS v FROM transactions "
+        f"WHERE primary_category IN ({placeholders}) AND direction = 'inflow' "
+        f"AND occurred_on >= ? AND occurred_on < ?",
+        (*SPEND_OFFSET_CATEGORIES, start, end),
+    )
+
+
+def _earned_income(connection: sqlite3.Connection, start: str, end: str) -> float:
+    """``inflows`` (income-only) minus the income-side reimbursement subcategories.
+
+    A reporting split of the existing income line — the true earned income once
+    reimbursements/refunds booked as income are removed. The ``income`` rows are
+    NOT modified; ``inflows`` and ``net_fcf`` are unchanged.
+    """
+    return round(
+        _income_inflows(connection, start, end) - _income_offset_sum(connection, start, end),
+        2,
+    )
+
+
+def _reimbursements(
+    connection: sqlite3.Connection, start: str, end: str
+) -> tuple[float, float, float]:
+    """Total consumption offsets over [start, end) as ``(total, income, spend)``.
+
+    ``total`` = income-side offsets (reimbursement/refund subcats under
+    ``income``) + spend-side offsets (in-category inflow refunds). The split is
+    returned so the identity cross-check can separate the reimbursements that
+    were already inside ``net_fcf`` (income-side) from those that never were
+    (spend-side).
+    """
+    income_side = _income_offset_sum(connection, start, end)
+    spend_side = _spend_offset_sum(connection, start, end)
+    return round(income_side + spend_side, 2), round(income_side, 2), round(spend_side, 2)
+
+
+def _mortgage_principal(
+    connection: sqlite3.Connection,
+    year: int,
+    month: int,
+    start: str,
+    end: str,
+    mortgage: MortgageConfig | None,
+) -> tuple[float, float, float]:
+    """Debt-paydown carve-out for [start, end) as ``(total, scheduled, nonscheduled)``.
+
+    ``scheduled`` is the amortized principal portion of the recurring IonBank
+    mortgage payment, counted only when a scheduled row actually posted this
+    month (a row matching ``merchant_match`` within ±$50 of ``scheduled_payment``).
+    Escrow + interest of that payment stay in ``fixed_obligations`` — only
+    principal is carved out. ``nonscheduled`` is the full amount of every other
+    IonBank ``fixed_obligation`` row (the paid-off HELOC + extra-principal
+    prepayments), treated as 100% debt paydown per the audit default.
+
+    Without a config block the scheduled portion is 0 (no anchor to amortize
+    from) but non-scheduled rows are still carved out using fallback
+    identification constants.
+    """
+    merchant = mortgage.merchant_match if mortgage else _FALLBACK_MORTGAGE_MERCHANT
+    scheduled_amount = mortgage.scheduled_payment if mortgage else _FALLBACK_SCHEDULED_PAYMENT
+
+    rows = connection.execute(
+        "SELECT amount FROM transactions "
+        "WHERE merchant_normalized = ? AND primary_category = 'fixed_obligation' "
+        "AND direction != 'inflow' AND occurred_on >= ? AND occurred_on < ?",
+        (merchant, start, end),
+    ).fetchall()
+
+    scheduled_count = 0
+    nonscheduled = 0.0
+    for row in rows:
+        amount = abs(float(row["amount"]))
+        if abs(amount - scheduled_amount) <= _MORTGAGE_MATCH_TOLERANCE:
+            scheduled_count += 1
+        else:
+            nonscheduled += amount
+
+    scheduled_principal = 0.0
+    if scheduled_count > 0 and mortgage is not None:
+        scheduled_principal = round(
+            mortgage.amortized_principal(year, month) * scheduled_count, 2
+        )
+    elif rows and scheduled_count == 0 and mortgage is not None:
+        # IonBank activity this month but nothing matched the scheduled payment —
+        # escrow drift may have moved the amount outside tolerance. Surface it so
+        # the carve-out can be reconciled rather than silently under-counted.
+        logger.warning(
+            "[monthly-summary] %04d-%02d: IonBank fixed_obligation rows present "
+            "but none matched the scheduled payment $%.2f (±$%.0f). Scheduled "
+            "mortgage principal counted as $0 for the month; check for escrow "
+            "drift in the payment amount.",
+            year,
+            month,
+            scheduled_amount,
+            _MORTGAGE_MATCH_TOLERANCE,
+        )
+
+    nonscheduled = round(nonscheduled, 2)
+    return round(scheduled_principal + nonscheduled, 2), scheduled_principal, nonscheduled
+
+
 def _merchant_totals(
     connection: sqlite3.Connection, start: str, end: str
 ) -> tuple[dict[str, float], dict[str, str]]:
@@ -373,6 +548,7 @@ def compute_monthly_summary(
     year: int,
     month: int,
     annual_reference: AnnualReferenceEntry | None = None,
+    mortgage: MortgageConfig | None = None,
 ) -> dict[str, Any]:
     """Compute the structured monthly summary dict. Pure — no file I/O.
 
@@ -418,6 +594,18 @@ def compute_monthly_summary(
         discretionary_prior = _discretionary_sum(connection, prior_start, prior_next)
         ytd_discretionary = _discretionary_sum(connection, year_start, next_month_start)
 
+        # --- Section 2: net-consumption view (additive, DL-2026-06-15 safe) ---
+        # Derived from existing rows by subcategory + a config-driven mortgage
+        # amortization. None of inflows / fixed_obligations / discretionary /
+        # net_fcf move; these are new reporting lines layered on top.
+        earned_income = _earned_income(connection, month_start, next_month_start)
+        reimb_total, reimb_income, reimb_spend = _reimbursements(
+            connection, month_start, next_month_start
+        )
+        mort_total, mort_scheduled, mort_nonscheduled = _mortgage_principal(
+            connection, year, month, month_start, next_month_start, mortgage
+        )
+
         # --- Section 2: theoretical view ------------------------------------
         payroll_inflows = _scalar(
             connection,
@@ -459,6 +647,13 @@ def compute_monthly_summary(
     net_fcf = round(inflows - fixed_obligations - discretionary_this, 2)
     savings_rate_txn = (
         round(monthly_delta / inflows * 100.0, 2) if inflows > 0 else 0.0
+    )
+
+    # --- Section 2 net-consumption derived ----------------------------------
+    # True consumption = gross spend, less reimbursements, less the principal
+    # portion of debt payments (balance-sheet-neutral saving, not spending).
+    net_consumption = round(
+        fixed_obligations + discretionary_this - reimb_total - mort_total, 2
     )
 
     # --- Section 2 theoretical derived --------------------------------------
@@ -544,6 +739,30 @@ def compute_monthly_summary(
             "net_fcf": net_fcf,
             "savings_rate_pct": savings_rate_txn,
         },
+        # New, strictly additive. `net_consumption` is the true-consumption
+        # companion to `net_fcf`: gross spend net of reimbursements and the
+        # carved-out mortgage principal. `earned_income` is the income line with
+        # reimbursements split back out. See the identity note below.
+        #
+        # Identity (holds to the cent every month):
+        #   earned_income - net_consumption
+        #     == net_fcf + mortgage_principal + reimbursements_spend_side
+        # i.e. income minus true consumption = cash saved (net_fcf) + equity
+        # built via principal + in-category refunds that never touched the
+        # frozen income line. The naive `net_fcf == earned_income -
+        # net_consumption` only holds when the latter two terms are zero; the
+        # reimbursements booked as income ARE just moved between the two sides of
+        # the subtraction and cancel, which is why they do not appear here.
+        "consumption": {
+            "earned_income": earned_income,
+            "reimbursements": reimb_total,
+            "reimbursements_income_side": reimb_income,
+            "reimbursements_spend_side": reimb_spend,
+            "mortgage_principal": mort_total,
+            "mortgage_principal_scheduled": mort_scheduled,
+            "debt_paydown_nonscheduled": mort_nonscheduled,
+            "net_consumption": net_consumption,
+        },
         "fcf_theoretical": {
             "gross_monthly": round(gross_monthly, 2),
             "tax_advantaged_contributions": tax_advantaged,
@@ -594,6 +813,7 @@ def generate_monthly_summary(
     month: int,
     output_root: Path,
     annual_reference: AnnualReferenceEntry | None = None,
+    mortgage: MortgageConfig | None = None,
 ) -> dict[str, Any]:
     """Compute the summary, render + write the markdown, return the dict.
 
@@ -605,7 +825,12 @@ def generate_monthly_summary(
     module docstring for the scheduling contract.
     """
     summary = compute_monthly_summary(
-        database, wealth_bridge, year, month, annual_reference=annual_reference
+        database,
+        wealth_bridge,
+        year,
+        month,
+        annual_reference=annual_reference,
+        mortgage=mortgage,
     )
     markdown_path, manual_preserved = write_monthly_summary(
         summary, output_root, wealth_bridge.monthly_summary_output_dir

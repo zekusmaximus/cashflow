@@ -34,6 +34,18 @@ def _render_month_rows(months: list[dict[str, Any]]) -> str:
     )
 
 
+def _render_consumption_rows(months: list[dict[str, Any]]) -> str:
+    if not months:
+        return "| _(no transactions this year)_ | | | | |"
+    return "\n".join(
+        f"| {row['month']} | {_money(row['consumption']['earned_income'])} | "
+        f"{_money(row['consumption']['reimbursements'])} | "
+        f"{_money(row['consumption']['mortgage_principal'])} | "
+        f"{_money(row['consumption']['net_consumption'])} |"
+        for row in months
+    )
+
+
 def _render_breakdown_rows(breakdown: list[dict[str, Any]]) -> str:
     if not breakdown:
         return "| _(no transactions this year)_ | | |"
@@ -46,6 +58,7 @@ def _render_breakdown_rows(breakdown: list[dict[str, Any]]) -> str:
 def render_annual_markdown(summary: dict[str, Any], manual_body: str) -> str:
     """Render the full annual summary document. ``manual_body`` re-emitted as-is."""
     totals = summary["totals"]
+    consumption_totals = summary["consumption_totals"]
     methodology = summary["methodology"]
 
     return f"""# {summary['year']} Annual Cashflow Summary
@@ -63,7 +76,22 @@ annual view is the monthly view summed, never a separate definition._
 
 Net FCF per month = income − fixed_obligations − discretionary.
 
-## 2. Category Breakdown (informational)
+## 2. Net Consumption Bridge (additive)
+
+Strictly additive over Section 1 — the frozen spend bridge is unchanged. These
+lines net reimbursements/refunds out of spend and carve the mortgage principal
+(debt paydown, not consumption) out of it, exposing true `net_consumption`.
+
+| Month | Earned income | Reimbursements | Mortgage principal | Net consumption |
+| --- | ---: | ---: | ---: | ---: |
+{_render_consumption_rows(summary['months'])}
+| **Total** | **{_money(consumption_totals['earned_income'])}** | **{_money(consumption_totals['reimbursements'])}** | **{_money(consumption_totals['mortgage_principal'])}** | **{_money(consumption_totals['net_consumption'])}** |
+
+Net consumption = fixed_obligations + discretionary − reimbursements −
+mortgage_principal. Escrow and interest stay in consumption; only loan principal
+is carved out.
+
+## 3. Category Breakdown (informational)
 
 Raw `GROUP BY primary_category` over the year using `ABS(amount)`. This spans
 **all** categories — including transfer/income/tax — so it is a reference table,
@@ -73,7 +101,7 @@ not the spend bridge.
 | --- | ---: | ---: |
 {_render_breakdown_rows(summary['category_breakdown'])}
 
-## 3. Notes for Review
+## 4. Notes for Review
 
 {_AUTO_OPEN}
 No auto-flags are computed at the annual level — see the monthly summaries for
@@ -89,6 +117,8 @@ flag detail.
 - **Spend definition:** {methodology['spend_definition']}. Spend is
   category-driven, never direction-driven: a `direction='transfer'` row whose
   `primary_category` is `fixed_obligation` (the IonBank mortgage) is spending.
+- **Net consumption:** {methodology['net_consumption_definition']}. Additive
+  reporting layer — no transaction row is reclassified and `net_fcf` is frozen.
 - **Discretionary scope:** `primary_category` ∈
   {methodology['discretionary_categories']}.
 - **Excluded categories:** {methodology['excluded_categories']} are outside the

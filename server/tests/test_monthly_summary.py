@@ -7,8 +7,11 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from liquidity_gate_mcp.balances import (
     DEFAULT_WEALTH_BRIDGE,
+    MortgageConfig,
     WealthBridgeConfig,
     load_balances,
 )
@@ -352,6 +355,146 @@ def test_fixed_obligation_transfer_direction_counts(
     summary = compute_monthly_summary(database, _wealth_bridge(), 2026, 5)
     # 1000 outflow + 4044.66 transfer-direction mortgage = 5044.66.
     assert summary["fcf_transactions"]["fixed_obligations"] == 5044.66
+
+
+def _ion_mortgage() -> MortgageConfig:
+    return MortgageConfig(
+        merchant_match="IonBank Mortgage",
+        scheduled_payment=4044.66,
+        principal_and_interest=2611.83,
+        escrow=1432.83,
+        annual_rate=0.04625,
+        anchor_date=date(2026, 6, 17),
+        anchor_balance=475016.69,
+    )
+
+
+def _seed_june_consumption(connection: sqlite3.Connection) -> None:
+    """A June-2026 scenario exercising every reimbursement + mortgage path."""
+    _seed_account(connection)
+    acct = dict(account_id="acct-beacon-1234")
+    # Income line: payroll (earned), two reimbursement subcats (offsets), and a
+    # tax_refund that must NOT be netted (belongs to a tax view).
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 2), amount=10000.0,
+               direction="inflow", primary_category="income", subcategory="payroll",
+               tx_id="jun-payroll")
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 3), amount=500.0,
+               direction="inflow", primary_category="income",
+               subcategory="insurance_reimbursement", tx_id="jun-ins")
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 4), amount=100.0,
+               direction="inflow", primary_category="income", subcategory="refund",
+               tx_id="jun-refund")
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 5), amount=300.0,
+               direction="inflow", primary_category="income", subcategory="tax_refund",
+               tx_id="jun-taxrefund")
+    # In-category refund (spend-side offset).
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 6), amount=200.0,
+               direction="inflow", primary_category="variable_lifestyle",
+               subcategory="refund", tx_id="jun-vl-refund")
+    # Discretionary spend.
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 7), amount=-2000.0,
+               direction="outflow", primary_category="variable_lifestyle",
+               tx_id="jun-vl-spend")
+    # Scheduled mortgage (P&I + escrow) + two non-scheduled IonBank debt-paydown
+    # rows (HELOC + prepayment) + one non-IonBank fixed obligation.
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 8), amount=-4044.66,
+               direction="transfer", primary_category="fixed_obligation",
+               subcategory="mortgage", merchant_normalized="IonBank Mortgage",
+               tx_id="jun-mortgage")
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 9), amount=-1775.00,
+               direction="outflow", primary_category="fixed_obligation",
+               merchant_normalized="IonBank Mortgage", tx_id="jun-heloc")
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 10), amount=-1207.44,
+               direction="outflow", primary_category="fixed_obligation",
+               merchant_normalized="IonBank Mortgage", tx_id="jun-prepay")
+    _insert_tx(connection, **acct, occurred_on=date(2026, 6, 11), amount=-800.0,
+               direction="outflow", primary_category="fixed_obligation",
+               tx_id="jun-other-fo")
+    connection.commit()
+
+
+def test_net_consumption_reimbursements_and_mortgage_principal(
+    database: DatabaseManager,
+) -> None:
+    connection = database.connect()
+    try:
+        _seed_june_consumption(connection)
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(
+        database, _wealth_bridge(), 2026, 6, mortgage=_ion_mortgage()
+    )
+    fcf = summary["fcf_transactions"]
+    con = summary["consumption"]
+
+    # Frozen fields are unchanged by the additive layer.
+    assert fcf["inflows"] == 10900.0  # payroll + ins + refund + tax_refund
+    assert fcf["fixed_obligations"] == 7827.10  # 4044.66 + 1775 + 1207.44 + 800
+    assert fcf["discretionary"] == 2000.0
+    assert fcf["net_fcf"] == pytest.approx(1072.90, abs=0.01)
+
+    # Reimbursements: income-side (ins 500 + refund 100; tax_refund excluded) +
+    # spend-side in-category refund (200).
+    assert con["reimbursements_income_side"] == 600.0
+    assert con["reimbursements_spend_side"] == 200.0
+    assert con["reimbursements"] == 800.0
+    # Earned income = income inflows minus income-side reimbursements only.
+    assert con["earned_income"] == 10300.0
+
+    # Mortgage principal: amortized scheduled (~781) + the two non-scheduled
+    # IonBank rows (1775 + 1207.44); the non-IonBank $800 stays in consumption.
+    assert con["mortgage_principal_scheduled"] == pytest.approx(781.04, abs=0.01)
+    assert con["debt_paydown_nonscheduled"] == 2982.44
+    assert con["mortgage_principal"] == pytest.approx(3763.48, abs=0.01)
+
+    # Net consumption = FO + D − reimbursements − mortgage_principal.
+    expected_nc = round(7827.10 + 2000.0 - 800.0 - 3763.48, 2)
+    assert con["net_consumption"] == pytest.approx(expected_nc, abs=0.01)
+
+
+def test_net_consumption_identity_holds_to_the_cent(
+    database: DatabaseManager,
+) -> None:
+    # The full always-true identity: income minus true consumption equals cash
+    # saved (net_fcf) plus equity built via principal plus in-category refunds
+    # that never touched the frozen income line. (The reimbursements booked as
+    # income cancel between the two sides and do not appear.)
+    connection = database.connect()
+    try:
+        _seed_june_consumption(connection)
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(
+        database, _wealth_bridge(), 2026, 6, mortgage=_ion_mortgage()
+    )
+    fcf = summary["fcf_transactions"]
+    con = summary["consumption"]
+
+    lhs = round(con["earned_income"] - con["net_consumption"], 2)
+    rhs = round(
+        fcf["net_fcf"] + con["mortgage_principal"] + con["reimbursements_spend_side"], 2
+    )
+    assert lhs == pytest.approx(rhs, abs=0.01)
+
+
+def test_mortgage_principal_without_config_carves_nonscheduled_only(
+    database: DatabaseManager,
+) -> None:
+    # Older config with no [mortgage.ion]: scheduled principal degrades to 0 (no
+    # anchor to amortize), but non-scheduled IonBank rows are still carved out.
+    connection = database.connect()
+    try:
+        _seed_june_consumption(connection)
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(database, _wealth_bridge(), 2026, 6, mortgage=None)
+    con = summary["consumption"]
+    assert con["mortgage_principal_scheduled"] == 0.0
+    assert con["debt_paydown_nonscheduled"] == 2982.44
+    assert con["mortgage_principal"] == 2982.44
 
 
 def test_income_outflow_direction_excluded_from_inflows(
