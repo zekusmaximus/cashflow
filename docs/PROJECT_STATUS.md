@@ -5,11 +5,14 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-06-16 (state reconciled against the watch-root canonical
-files `STATUS.md` / `DECISIONS.md`, which govern on any conflict: IonBank
-reclassified as the home-mortgage payee per DL-2026-06-10-A, snapshot counts and
-classifier coverage refreshed, spend basis moved from direction to category per
-DL-2026-06-15, and two annual-summary MCP tools added.)
+**Last updated:** 2026-08-01 (docs-only reconciliation against the watch-root
+canonical files `STATUS.md` / `DECISIONS.md`, which govern on any conflict:
+check-register status corrected — the register is live through #212 and only
+the deposit ledger remains outstanding, the `[wealth_bridge]` config noted as
+populated 2026-07-09 so the theoretical savings-rate view is no longer flagged
+untrustworthy, and the HELOC payoff and Ally inbound re-pairing brought into
+past tense. Counts, totals, and coverage percentages were deliberately left
+as-is; `STATUS.md` governs those.)
 
 > **Canonical live state lives in the watch root, not here.** For current
 > transaction counts, per-account totals, classification coverage, active
@@ -75,7 +78,8 @@ full row-level detail:
 1. **IonBank ONLINE XFR** (see STATUS.md / DL-2026-06-10-A for current
    figures) — **not** an uningested
    transfer partner. IonBank is the household's home-mortgage payee (and a
-   HELOC being paid off June/July 2026), not an owned liquid account. Per
+   HELOC that was paid off in 2026; IonBank is now the primary mortgage only),
+   not an owned liquid account. Per
    DL-2026-06-10-A, every `IonBank ONLINE XFR` row is classified
    `fixed_obligation/mortgage/joint/recurring` via rule `rule-ionbank-mortgage`
    (priority 10, `direction_filter='transfer'` because the parser stamps these
@@ -90,8 +94,8 @@ Previously reported item 2 (Ally inbound-from rows tagged as transfer with
 no counterpart) is now **resolved**: `pair_transfers` auto-reclassifies
 unpaired Ally HYSA `Requested transfer from …` rows as `direction='inflow'`
 after the pairing pass. The three affected rows ($4,500 on 2026-01-05,
-$5,080 on 2026-04-08, $1,000 on 2026-05-08) will be corrected on the next
-`pair_transfers` call.
+$5,080 on 2026-04-08, $1,000 on 2026-05-08) were corrected on a subsequent
+`pair_transfers` run.
 
 **Spend basis is category-driven, not direction-driven (PR #29,
 DL-2026-06-15).** The `monthly_cashflow_summary` SQL view, the Python monthly
@@ -192,9 +196,16 @@ by a Cowork scheduled task on the 1st of each month, targeting the prior month.
 Config dependency: a new `[wealth_bridge]` section in `balances.toml` supplies
 gross household income, 401(k)/HSA contributions, the $80K HYSA target, and the
 flag thresholds. `jeff_401k_monthly` and `ashley_401k_monthly` ship as `0`
-placeholders — the server logs a warning at startup until they are populated
-from the latest Novartis paystub; generation is not blocked, but the
-theoretical savings-rate view is untrustworthy until then.
+placeholders in the template, and the server logs a startup warning until they
+are populated; generation is never blocked. As of 2026-07-09 the live
+watch-root `balances.toml` is populated (from the 06/2026 paystubs), so the
+placeholder warning no longer fires and the theoretical savings-rate view
+reports `config_incomplete=false`. One input remains approximate:
+`gross_household_income_annual` is unreconciled because Jeff's compensation is
+base-plus-quarterly-bonus, so straight-line monthly gross distorts individual
+months and the implied-withholding flag can still fire in bonus quarters — to
+be reconciled at year end via `annual_household_reference.toml`. See
+`STATUS.md` open items 4 and 16 for current figures.
 
 **Annual spend-bridge rollup (2026-06-15):** two additive MCP tools —
 `compute_annual_summary` (pure, returns the structured dict) and
@@ -456,8 +467,8 @@ normal use of the repo for transaction-based spending analysis.
 - [ ] **Chase same-day dedup backfill.** Fixed in code: a backwards-compatible `|seqN` suffix now disambiguates duplicate (date, amount, description) rows within a file, while the first occurrence keeps the legacy hash so already-ingested rows still match on re-import. The 12 collapsed rows from the original Chase ingest remain absent in the DB; they'll appear automatically next time the Chase CSV is re-exported and re-ingested. No data backfill needed otherwise.
 - [x] **Untagged transfer patterns from Beacon parser** — FID BKG SVC LLC MONEYLINE, VENMO PAYMENT, and MOBILE CHECK DEP are now covered by classifier rules added in the second pass.
 - [x] **Watch-root Cowork project isolation resolved.** `C:\Users\Jeff\Documents\Cashflow\.claudecowork` is now a junction to the repo `.claudecowork\` directory — `agent.md`, `config.json`, and `mcp-server.json` are shared automatically. No manual mirroring needed.
-- [x] **Three Ally HYSA inbound transfers have no Beacon counterpart — resolved.** $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). `pair_transfers` now auto-reclassifies unpaired Ally HYSA inbound-from rows as `direction='inflow'`; these three rows will be corrected on the next tool run. The 1/5 row is confirmed as Jeff's bonus check deposit; origin of the 4/8 and 5/8 rows is still unconfirmed but both are correctly treated as inflows.
-- [ ] **Check register + deposit ledger templates need to be filled in.** Templates ship in [server/templates/](../server/templates/); copy `check_register.template.csv` → `<watch_root>/check_register.csv` and `check_deposits.template.csv` → `<watch_root>/check_deposits.csv`, fill them in, then run `ingest_check_register` / `ingest_check_deposit_ledger` from a Cowork session. Until done, the eight outbound check rows (series 179–182 and 209–212) and nine `MOBILE CHECK DEP` rows remain blind-classified.
+- [x] **Three Ally HYSA inbound transfers have no Beacon counterpart — resolved.** $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). `pair_transfers` now auto-reclassifies unpaired Ally HYSA inbound-from rows as `direction='inflow'`; these three rows were corrected on a subsequent `pair_transfers` run. The 1/5 row is confirmed as Jeff's bonus check deposit; origin of the 4/8 and 5/8 rows is still unconfirmed but both are correctly treated as inflows.
+- [ ] **Check deposit ledger not yet filled in; check register is live through #212.** `<watch_root>/check_register.csv` is populated and has been ingested via `ingest_check_register` — the outbound check series 179–182 and 209–212 carry real payees, so they are no longer blind-classified. Checks #213–215 (June 2026) were resolved 2026-07-01 through `upsert_transaction_override` rather than the register; backfilling them into `check_register.csv` is optional record-keeping (`STATUS.md` open item 11). Still outstanding: `<watch_root>/check_deposits.csv` — copy `check_deposits.template.csv` from [server/templates/](../server/templates/), fill it in, and run `ingest_check_deposit_ledger` from a Cowork session. Until then the `MOBILE CHECK DEP` inbound rows carry no source attribution (see `STATUS.md` open item 16, which flags ~$11,744 of unattributed `check_deposit` rows as a caveat on `earned_income`).
 - [ ] **UI "Import Check Register" button deferred.** Tauri has no MCP transport today; ledger imports happen via Cowork. See [DECISION_LOG.md](DECISION_LOG.md) entry from 2026-05-27.
 - [x] **Fidelity MoneyLine medium-confidence item — RESOLVED 2026-06-10.** The
   `FID BKG SVC LLC MONEYLINE` $15×4/mo debits are confirmed brokerage
