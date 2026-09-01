@@ -5,13 +5,11 @@ Liquidity Gate household spending reconstruction workspace. Update this file as 
 lands. The master index ([00_CASH_FLOW_MASTER_INDEX.md](00_CASH_FLOW_MASTER_INDEX.md))
 remains the canonical project plan; this file is the operational heartbeat.
 
-**Last updated:** 2026-08-01 (docs-only reconciliation against the watch-root
-canonical files `STATUS.md` / `DECISIONS.md`, which govern on any conflict:
-check-register status corrected — the register is live through #212 and only
-the deposit ledger remains outstanding, the `[wealth_bridge]` config noted as
-populated 2026-07-09 so the theoretical savings-rate view is no longer flagged
-untrustworthy, and the HELOC payoff and Ally inbound re-pairing brought into
-past tense. Counts, totals, and coverage percentages were deliberately left
+**Last updated:** 2026-09-01 (docs-only reconciliation against the watch-root
+canonical files `STATUS.md` / `DECISIONS.md`, which govern on any conflict: the
+three DL-2026-08-03 decisions were mirrored into
+[DECISION_LOG.md](DECISION_LOG.md) and the check-register status was corrected
+to #216. Counts, totals, and coverage percentages were deliberately left
 as-is; `STATUS.md` governs those.)
 
 > **Canonical live state lives in the watch root, not here.** For current
@@ -468,7 +466,7 @@ normal use of the repo for transaction-based spending analysis.
 - [x] **Untagged transfer patterns from Beacon parser** — FID BKG SVC LLC MONEYLINE, VENMO PAYMENT, and MOBILE CHECK DEP are now covered by classifier rules added in the second pass.
 - [x] **Watch-root Cowork project isolation resolved.** `C:\Users\Jeff\Documents\Cashflow\.claudecowork` is now a junction to the repo `.claudecowork\` directory — `agent.md`, `config.json`, and `mcp-server.json` are shared automatically. No manual mirroring needed.
 - [x] **Three Ally HYSA inbound transfers have no Beacon counterpart — resolved.** $4,500 on 2026-01-05, $5,080 on 2026-04-08, $1,000 on 2026-05-08 (all `Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer`). `pair_transfers` now auto-reclassifies unpaired Ally HYSA inbound-from rows as `direction='inflow'`; these three rows were corrected on a subsequent `pair_transfers` run. The 1/5 row is confirmed as Jeff's bonus check deposit; origin of the 4/8 and 5/8 rows is still unconfirmed but both are correctly treated as inflows.
-- [ ] **Check deposit ledger not yet filled in; check register is live through #212.** `<watch_root>/check_register.csv` is populated and has been ingested via `ingest_check_register` — the outbound check series 179–182 and 209–212 carry real payees, so they are no longer blind-classified. Checks #213–215 (June 2026) were resolved 2026-07-01 through `upsert_transaction_override` rather than the register; backfilling them into `check_register.csv` is optional record-keeping (`STATUS.md` open item 11). Still outstanding: `<watch_root>/check_deposits.csv` — copy `check_deposits.template.csv` from [server/templates/](../server/templates/), fill it in, and run `ingest_check_deposit_ledger` from a Cowork session. Until then the `MOBILE CHECK DEP` inbound rows carry no source attribution (see `STATUS.md` open item 16, which flags ~$11,744 of unattributed `check_deposit` rows as a caveat on `earned_income`).
+- [ ] **Check deposit ledger not yet filled in; check register is live through #216.** `<watch_root>/check_register.csv` is populated and has been ingested via `ingest_check_register`. It was backfilled 2026-08-03 (adding 183, 184, 213–216) and re-ingested: 14/14 rows matched, zero unmatched. All fourteen paper checks — the outbound series 179–184 and 209–216 — are now register-sourced overrides rather than ad-hoc stamps, so none of them are blind-classified (`STATUS.md` open item 11). Posted dates were used where the written date is unknown; the matcher keys on account + amount + `CHECK# n`, so this is documentation only. Still outstanding: `<watch_root>/check_deposits.csv` — copy `check_deposits.template.csv` from [server/templates/](../server/templates/), fill it in, and run `ingest_check_deposit_ledger` from a Cowork session. Until then the `MOBILE CHECK DEP` inbound rows carry no source attribution (see `STATUS.md` open item 16, which flags ~$11,744 of unattributed `check_deposit` rows as a caveat on `earned_income`).
 - [ ] **UI "Import Check Register" button deferred.** Tauri has no MCP transport today; ledger imports happen via Cowork. See [DECISION_LOG.md](DECISION_LOG.md) entry from 2026-05-27.
 - [x] **Fidelity MoneyLine medium-confidence item — RESOLVED 2026-06-10.** The
   `FID BKG SVC LLC MONEYLINE` $15×4/mo debits are confirmed brokerage

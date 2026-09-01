@@ -7,6 +7,85 @@ here's why we won't revisit that for a while" calls.
 
 ---
 
+## 2026-08-03 — HELOC payoff accepted on Jeff's attestation; no statement required (DL-2026-08-03-A)
+
+**Context.** DL-2026-06-10-A recorded IonBank as the home-mortgage payee and
+noted a HELOC being paid off June/July 2026. The payoff lump was expected to
+appear in an ingested account and be stamped `lifecycle = one_time`. It never
+did — no Jan–Jul 2026 row corresponds to it, so it was either funded outside
+the gate or settled internally at Ion.
+
+**Decision.** Accept the payoff on Jeff's attestation (2026-08-03); no
+documentary evidence is required for the classification work. The data
+corroborates it: July is the first month of 2026 with
+`debt_paydown_nonscheduled` = $0.00 and a single IonBank row (7/2, $4,044.66,
+the scheduled mortgage). The HELOC-era ~$1,775 / ~$1,220 companion lines have
+ceased. Going forward IonBank is the primary mortgage only. The missing payoff
+lump is deliberately not chased.
+
+**One bounded consequence.** The 2026 YTD `debt_paydown_nonscheduled` of
+$17,942.33 is credited as 100% principal. If the HELOC's recurring payments
+carried interest, `net_consumption` is understated by that interest for
+Jan–Jun. A final payoff statement — or just the original balance and rate —
+would split it exactly; absent one, the figure stands as-is. Historical only:
+it does not recur post-payoff, and the scheduled mortgage's $781.04/mo
+principal is exact.
+
+**Alternatives considered.**
+
+- *Hold the HELOC classification open until a payoff statement is produced.*
+  Rejected. The classification work does not depend on it, the corroborating
+  evidence is already in the data, and the only thing a statement would buy is
+  an exact interest split on a bounded, non-recurring historical figure.
+
+---
+
+## 2026-08-03 — July 2026 classification confirmations (DL-2026-08-03-B)
+
+**Decision.** Jeff confirmed three open July items on 2026-08-03:
+
+1. Beacon `DEPOSIT` +$13,000.00 on 7/24 = Q3 quarterly bonus →
+   `income/bonus/jeff/recurring`. Category totals are unchanged from the
+   provisional `income/check_deposit` stamp, so July's headline stands final:
+   net FCF **+$8,629.12**, savings rate 13.1%.
+2. `CHECK# 216` −$484.96 (7/1) and `CHECK# 184` −$544.51 (7/27) = West
+   Hartford Landscaping LLC → `fixed_obligation/landscaping/joint/recurring`.
+   #216 is June service paid 7/1, which closes the apparent June landscaping
+   gap.
+3. Ally HYSA = **$52,000.00 verified at 2026-08-01**; checkpoint written via
+   `upsert_balance_checkpoint`, matching the computed 7/31 close to the cent
+   (zero variance). Two consecutive verified anchors now agree with the
+   transaction chain.
+
+`check_register.csv` was backfilled through #216 and re-ingested in the same
+session — all fourteen paper checks are now register-sourced overrides rather
+than ad-hoc stamps (see the corresponding PROJECT_STATUS correction).
+
+---
+
+## 2026-08-03 — Late-posting prior-month Chase rows are structural; regenerate the prior month on every ingest (DL-2026-08-03-C)
+
+**Context.** Each new Chase statement carries a few hundred dollars of
+prior-month-dated rows that post after the prior month's file was exported:
+May→June, 5 rows / $460.54; June→July, 8 rows / $425.36. On 2026-07-01 the
+decision was made not to regenerate May for this reason, which left the stored
+May summary stale against the DB for a month.
+
+**Decision.** Treat this as a structural pattern, not an incident. Standing
+policy: on every monthly ingest, regenerate the **prior** month's summary as
+well as the new one, and note the restatement in the watch-root `STATUS.md`. Do
+not raise it as a pipeline error. The 2026-07-01 decline-to-regenerate is
+retired — summaries are regenerated to match the DB.
+
+**Alternatives considered.**
+
+- *Hold the prior month's summary and let late rows land in the following
+  month.* Rejected. It makes the stored markdown disagree with the DB, and the
+  monthly summaries are the interface contract with the downstream Finances
+  project.
+
+---
+
 ## 2026-06-15 — `monthly_cashflow_summary` moved from direction basis to category basis (DL-2026-06-15)
 
 **Context.** Spend buckets were *direction*-driven: outflow meant
