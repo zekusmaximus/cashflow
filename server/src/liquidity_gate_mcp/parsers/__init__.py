@@ -24,6 +24,12 @@ from .citi_csv import (
     CitiParseResult,
     parse_citi_csv,
 )
+from .selfhelp_csv import (
+    PARSER_VERSION as SELFHELP_PARSER_VERSION,
+    SELFHELP_SAVINGS_ACCOUNT,
+    SelfHelpParseResult,
+    parse_selfhelp_csv,
+)
 from .webster_csv import (
     PARSER_VERSION as WEBSTER_PARSER_VERSION,
     WEBSTER_CHECKING_ACCOUNT,
@@ -44,6 +50,9 @@ __all__ = [
     "CITI_PARSER_VERSION",
     "CitiParseResult",
     "ParseResult",
+    "SELFHELP_PARSER_VERSION",
+    "SELFHELP_SAVINGS_ACCOUNT",
+    "SelfHelpParseResult",
     "SkippedRow",
     "WEBSTER_CHECKING_ACCOUNT",
     "WEBSTER_PARSER_VERSION",
@@ -52,5 +61,6 @@ __all__ = [
     "parse_beacon_csv",
     "parse_chase_csv",
     "parse_citi_csv",
+    "parse_selfhelp_csv",
     "parse_webster_csv",
 ]

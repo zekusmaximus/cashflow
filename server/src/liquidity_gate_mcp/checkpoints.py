@@ -27,6 +27,7 @@ from __future__ import annotations
 from calendar import monthrange
 from datetime import date
 from pathlib import Path
+import re
 import sqlite3
 
 from .balances import load_balances
@@ -161,13 +162,26 @@ def connection_today(database: DatabaseManager) -> date:
         connection.close()
 
 
+def _alias_key(value: str) -> str:
+    """Squash an institution name to its alias form.
+
+    Lowercases and drops every non-alphanumeric character, so ``Self-Help``
+    and ``selfhelp`` land on the same key. The four original aliases (ally,
+    chase, beacon, webster) are unaffected — they contain no punctuation —
+    so this only adds a spelling, it never moves an existing one.
+    """
+    return re.sub(r"[^a-z0-9]", "", value.strip().lower())
+
+
 def _resolve_account(
     connection: sqlite3.Connection, account_input: str
 ) -> sqlite3.Row:
     """Resolve to an accounts row using balances.toml's order: id, then alias.
 
     Exact ``accounts.id`` wins; otherwise a case-insensitive institution alias
-    (ally, chase, beacon, webster) must match exactly one account.
+    (ally, chase, beacon, webster, selfhelp) must match exactly one account.
+    The alias comparison ignores punctuation so the Self-Help FCU rental
+    savings account answers to ``selfhelp`` as well as ``self-help``.
     """
     row = connection.execute(
         "SELECT id, institution, account_type FROM accounts WHERE id = ?",
@@ -176,12 +190,14 @@ def _resolve_account(
     if row is not None:
         return row
 
-    alias = account_input.strip().lower()
-    rows = connection.execute(
-        "SELECT id, institution, account_type FROM accounts "
-        "WHERE LOWER(institution) = ?",
-        (alias,),
-    ).fetchall()
+    alias = _alias_key(account_input)
+    rows = [
+        candidate
+        for candidate in connection.execute(
+            "SELECT id, institution, account_type FROM accounts"
+        ).fetchall()
+        if _alias_key(candidate["institution"]) == alias
+    ]
     if len(rows) == 1:
         return rows[0]
     if len(rows) > 1:
@@ -205,10 +221,17 @@ def _section_key(connection: sqlite3.Connection, account: sqlite3.Row) -> str:
     institution has multiple accounts (the alias would be ambiguous).
     """
     institution = account["institution"]
-    count = connection.execute(
-        "SELECT COUNT(*) AS n FROM accounts WHERE LOWER(institution) = ?",
-        (institution.strip().lower(),),
-    ).fetchone()["n"]
+    alias = _alias_key(institution)
+    count = sum(
+        1
+        for candidate in connection.execute(
+            "SELECT institution FROM accounts"
+        ).fetchall()
+        if _alias_key(candidate["institution"]) == alias
+    )
+    # The written key stays the plain lowercased institution ("self-help"),
+    # which is exactly what BalancesConfig.lookup reads back — only the
+    # *input* alias is punctuation-tolerant.
     return institution.strip().lower() if count == 1 else account["id"]
 
 

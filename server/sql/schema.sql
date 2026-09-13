@@ -239,6 +239,65 @@ VALUES
    'variable_lifestyle', 'groceries', 'Whole Foods', NULL, 'recurring', 'high', 20,
    'Whole Foods grocery purchases');
 
+-- Self-Help FCU rental savings (acct-selfhelp-savings). Every rule here is
+-- account_filter-scoped so none of it can reach another account's rows.
+--
+-- These match against the joined description the selfhelp parser builds,
+-- "<Description> | <Ext>" (see parsers/selfhelp_csv.build_description). That
+-- matters because Description is EMPTY on 8 of the 21 rows in the
+-- life-of-account export -- including every "Share Deposit" rent row -- so the
+-- transaction type only reaches the classifier through the Ext half. On those
+-- rows there is no "|" at all (the join strips the separator), which is why
+-- the Ext-anchored patterns below accept either a leading "|" or the start of
+-- the string. The raw Ext value is also stored at metadata_json.ext for
+-- future rules that want an exact match rather than a substring.
+--
+-- Priorities: sweeps/verify (15) < dividends (18) < rent (20). Dividends sit
+-- ahead of rent deliberately, per the handoff.
+
+INSERT OR IGNORE INTO classification_rules
+  (id, pattern, account_filter, direction_filter, primary_category, subcategory,
+   merchant_normalized, household_role, lifecycle, confidence, priority, notes)
+VALUES
+  -- Sweeps out to the Ally HYSA. The parser already tags these
+  -- direction='transfer'; this rule pins the category so they never count as
+  -- rental spending, and names them for the register. The trailing ACH id is
+  -- masked in newer exports, so the pattern stops at the "$TRANSFER" token.
+  ('rule-selfhelp-ally-sweep', '(?i)ally bank \$?\s*transfer',
+   'acct-selfhelp-savings', NULL, 'transfer', NULL,
+   'Ally Sweep', 'jeff', 'recurring', 'high', 15,
+   'Self-Help -> Ally rent sweeps; pairs with the Ally "Requested transfer from" legs'),
+
+  -- Ally's account-verification micro-deposits (+0.60, +0.46, -1.06 on
+  -- 2026-07-15). They net to zero and are plumbing, not income. Matched by
+  -- description, never by amount, so a future re-verification of any size
+  -- lands the same way.
+  ('rule-selfhelp-acctverify', '(?i)ally bank acctverify',
+   'acct-selfhelp-savings', NULL, 'transfer', NULL,
+   'Ally Account Verification', 'jeff', 'one_time', 'high', 15,
+   'Ally micro-deposit account-verification probes; net zero, not income'),
+
+  -- Share dividends. Matched on the Ext token, NOT the description text: the
+  -- five dividend rows use two different description formats ("TERM: ... APYE:"
+  -- for 3/31 and 5/31, "Annual Percentage Yield Earned:" for 6/30, 7/31 and
+  -- 8/31), so a description-text rule would catch at most three of five.
+  ('rule-selfhelp-dividend', '(?i)(?:^|\|\s*)dividend\s*$',
+   'acct-selfhelp-savings', NULL, 'income', 'interest',
+   'Self-Help Dividend', 'jeff', 'recurring', 'high', 18,
+   'Self-Help share dividends; matched on the Ext column, not description text'),
+
+  -- Rent from the 140 Kane D5 tenant. Matched on the Ext token and NEVER on
+  -- amount: the executed lease steps $1,295/mo through 2026-12 up to
+  -- $1,375/mo from 2027-01-01, and a life-of-account export may carry
+  -- pre-2026 rent at other amounts. Accepts both Ext spellings the tenant has
+  -- used ("Share Deposit Transfer" through 2026-04, "Share Deposit" from
+  -- 2026-05) and, because it anchors on the end of the string, never matches
+  -- the "ACH Share Withdrawal" sweeps.
+  ('rule-selfhelp-rent', '(?i)(?:^|\|\s*)share deposit(?: transfer)?\s*$',
+   'acct-selfhelp-savings', NULL, 'income', 'rental_income',
+   '140 Kane D5 Rent', 'jeff', 'recurring', 'high', 20,
+   'Rental income from the 140 Kane D5 tenant; matched on Ext, never on amount');
+
 -- Monthly cashflow rollup — CATEGORY-DRIVEN, never direction-driven. This view
 -- reconciles exactly to compute_monthly_summary in
 -- server/src/liquidity_gate_mcp/monthly_summary.py (inflow == fcf_transactions
