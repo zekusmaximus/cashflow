@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from liquidity_gate_mcp.database import DatabaseManager
 from liquidity_gate_mcp.lifecycle_audit import list_lifecycle_audit_candidates
 from liquidity_gate_mcp.models import LifecycleAuditRequest
+
+
+def _days_ago(days: int) -> str:
+    """A date inside ``lifecycle_audit``'s trailing-6-month window.
+
+    Criterion 1 counts merchant occurrences with
+    ``occurred_on >= date.today() - 183 days``, so any test that seeds the
+    "3+ visits" setup has to place its rows relative to today. Hardcoded
+    dates work only until the window slides past them: this file previously
+    seeded 2026-03-05, which fell out of the window on 2026-09-04 and turned
+    the suite red on a day nobody had touched the code.
+    """
+    return (date.today() - timedelta(days=days)).isoformat()
 
 
 def _seed_account(database: DatabaseManager) -> None:
@@ -61,7 +76,7 @@ def _insert(
 def test_one_time_with_recurring_merchant_surfaces(database: DatabaseManager) -> None:
     _seed_account(database)
     # 3 visits over the trailing-6mo window, all tagged one_time.
-    for i, day in enumerate(("2026-03-05", "2026-04-05", "2026-05-05"), start=1):
+    for i, day in enumerate((_days_ago(150), _days_ago(90), _days_ago(30)), start=1):
         _insert(
             database,
             tx_id=f"tx-coffee-{i}",
@@ -186,11 +201,14 @@ def test_results_ranked_by_absolute_amount(database: DatabaseManager) -> None:
 
 def test_min_amount_filters_small_rows(database: DatabaseManager) -> None:
     _seed_account(database)
+    # Same trailing-window dependency as the test above: the three rows have
+    # to be counted as one recurring merchant for min_amount to be the thing
+    # doing the filtering.
     for i in range(3):
         _insert(
             database,
             tx_id=f"tx-cheap-{i}",
-            occurred_on=f"2026-04-0{i+1}",
+            occurred_on=_days_ago(30 + i),
             merchant="Cheap Coffee",
             amount=-5.00,
             primary_category="variable_lifestyle",
