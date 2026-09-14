@@ -239,7 +239,13 @@ class IngestRunResult(BaseModel):
 class PairTransfersRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    date_tolerance_days: int = 3
+    # 5, not 3: the Self-Help -> Ally rent sweeps clear on the credit-union
+    # side before they land at Ally, and the July 2026 leg took four calendar
+    # days (2026-07-17 -> 2026-07-21). At 3 that pair could never form. The
+    # mutual-best-match rule keeps the wider window from inventing pairs — a
+    # row only pairs when it and its partner are each other's unique closest
+    # cross-account candidate, so a nearer legitimate partner still wins.
+    date_tolerance_days: int = 5
     dry_run: bool = False
     include_diagnostics: bool = True
 
@@ -282,6 +288,11 @@ class PairTransfersResult(BaseModel):
     candidates_examined: int = 0
     already_paired_skipped: int = 0
     ally_inbound_reclassified: int = 0
+    # Rows a previous run had reclassified to 'inflow' and this run put back
+    # into the pairing pass, plus how many of those actually found a partner.
+    # See transfers._rearm_reclassified_inbound.
+    inbound_rearmed: int = 0
+    inbound_rearmed_paired: int = 0
     unpaired: list[UnpairedTransfer] = Field(default_factory=list)
     ambiguous: list[AmbiguousTransfer] = Field(default_factory=list)
     suspected_untagged: list[SuspectedUntagged] = Field(default_factory=list)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Iterable
 from uuid import uuid4
@@ -55,6 +55,69 @@ class _Row:
         return round(abs(self.amount) * 100)
 
 
+def _is_reclassifiable_inbound(row: _Row) -> bool:
+    """True for rows the unpaired-inbound reclassification owns.
+
+    This is the single predicate that defines the reclassification's domain.
+    It is used twice, in opposite directions:
+
+    * forward  — an unpaired candidate matching it is flipped to 'inflow';
+    * backward — a stored 'inflow' row matching it is put *back* to
+      'transfer' at the top of the next run (see
+      ``_rearm_reclassified_inbound``).
+
+    Keeping both directions on one predicate is what makes the
+    reclassification re-armable instead of terminal. Widening the
+    reclassification to another account is a one-line change here and the
+    re-arm follows automatically.
+    """
+    return row.account_id == _ALLY_ACCOUNT_ID and bool(
+        _ALLY_FROM_PATTERN.search(row.description)
+    )
+
+
+def _rearm_reclassified_inbound(rows: list[_Row]) -> tuple[list[_Row], set[str]]:
+    """Put previously-reclassified inbound rows back into the pairing pass.
+
+    THE BUG THIS FIXES. ``pair_transfers`` used to be a one-way door: an Ally
+    "Requested transfer from ..." row that found no counterpart was written
+    back as ``direction='inflow'`` and committed. ``_resolve_pairs`` builds
+    its candidate list from ``direction == 'transfer'`` rows only, so once a
+    row was flipped it could never pair again — no matter what was ingested
+    later. Four Self-Help sweep legs (2026-01-05 $4,500, 2026-04-08 $5,080,
+    2026-05-08 $1,000, 2026-07-21 $2,901.69) had already been flipped before
+    the Self-Help account existed, so ingesting the Self-Help side alone
+    would not have paired a single one. There is no MCP escape hatch either:
+    ``transaction_overrides`` has no ``direction`` column, so
+    ``upsert_transaction_override`` cannot flip one back.
+
+    The repair is to re-arm rather than migrate: every run, before pairing,
+    any still-unpaired 'inflow' row inside the reclassification's own domain
+    goes back to 'transfer' and re-enters the candidate set. Rows that now
+    have a partner pair; rows that still have none fall straight back through
+    the same reclassification at the end of the run. That makes the pass
+    idempotent, self-healing for the four existing legs with no one-time
+    script to run, and immune to the same trap for any account added to the
+    predicate later.
+
+    A one-time migration was considered and rejected: it would fix these four
+    rows once and leave the one-way door in place for the next account.
+
+    Returns the re-armed rows (mutated copies) and their ids. Rows already
+    carrying a ``transfer_group_key`` are left alone — those are settled.
+    """
+    rearmed: list[_Row] = []
+    for index, row in enumerate(rows):
+        if row.direction != "inflow" or row.transfer_group_key is not None:
+            continue
+        if not _is_reclassifiable_inbound(row):
+            continue
+        restored = replace(row, direction="transfer")
+        rows[index] = restored
+        rearmed.append(restored)
+    return rearmed, {row.id for row in rearmed}
+
+
 def pair_transfers(
     database: DatabaseManager, request: PairTransfersRequest
 ) -> PairTransfersResult:
@@ -79,6 +142,10 @@ def pair_transfers(
         rows = _load_rows(connection)
         already_paired_skipped = sum(1 for r in rows if r.transfer_group_key is not None)
 
+        # Undo any prior run's terminal reclassification before selecting
+        # candidates, so rows stranded as 'inflow' get another chance to pair.
+        rearmed_rows, rearmed_ids = _rearm_reclassified_inbound(rows)
+
         candidates = [
             r
             for r in rows
@@ -99,13 +166,24 @@ def pair_transfers(
         ally_from_rows = [
             candidates_by_id[u.transaction_id]
             for u in unpaired_raw
-            if candidates_by_id[u.transaction_id].account_id == _ALLY_ACCOUNT_ID
-            and _ALLY_FROM_PATTERN.search(candidates_by_id[u.transaction_id].description)
+            if _is_reclassifiable_inbound(candidates_by_id[u.transaction_id])
         ]
         reclassified_ids = {r.id for r in ally_from_rows}
         unpaired = [u for u in unpaired_raw if u.transaction_id not in reclassified_ids]
 
-        if not request.dry_run and (pairings or ally_from_rows):
+        # A re-armed row that still finds no partner is about to be flipped
+        # straight back to 'inflow', which is what the DB already holds — so
+        # only persist the two directions that actually change something.
+        # This keeps a steady-state run a genuine no-op on disk.
+        rearm_writes = rearmed_ids - reclassified_ids
+        reclassify_writes = reclassified_ids - rearmed_ids
+
+        if not request.dry_run and (pairings or rearm_writes or reclassify_writes):
+            for row_id in sorted(rearm_writes):
+                connection.execute(
+                    "UPDATE transactions SET direction = 'transfer' WHERE id = ?",
+                    (row_id,),
+                )
             for left, right in pairings:
                 key = uuid4().hex
                 connection.execute(
@@ -118,10 +196,10 @@ def pair_transfers(
                     "WHERE id = ? AND transfer_group_key IS NULL",
                     (key, right.id),
                 )
-            for row in ally_from_rows:
+            for row_id in sorted(reclassify_writes):
                 connection.execute(
                     "UPDATE transactions SET direction = 'inflow' WHERE id = ?",
-                    (row.id,),
+                    (row_id,),
                 )
             connection.commit()
         else:
@@ -147,6 +225,8 @@ def pair_transfers(
         suspected_untagged=suspected,
         dry_run=request.dry_run,
         ally_inbound_reclassified=len(ally_from_rows),
+        inbound_rearmed=len(rearmed_rows),
+        inbound_rearmed_paired=len(rearm_writes),
     )
 
 

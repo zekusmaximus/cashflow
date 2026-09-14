@@ -561,6 +561,61 @@ def test_tool_resolves_exact_account_id(database: DatabaseManager, tmp_path: Pat
     assert result.account_id == "acct-ally-hysa"
 
 
+def test_tool_resolves_punctuated_institution_alias(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    """``selfhelp`` must resolve the "Self-Help" account.
+
+    Alias matching compares punctuation-stripped names, so the credit union
+    answers to the spelling Jeff actually types. The section key written to
+    balances.toml stays the plain lowercased institution ("self-help"), which
+    is what BalancesConfig.lookup reads back.
+    """
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id="acct-selfhelp-savings",
+            institution="Self-Help",
+            account_name="Self-Help FCU (rental)",
+            account_type="savings",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    settings = _settings_for(tmp_path, database.database_path)
+    result = upsert_balance_checkpoint(
+        database,
+        settings,
+        UpsertBalanceCheckpointRequest(
+            account="selfhelp", date=date(2026, 9, 2), balance=3837.44
+        ),
+    )
+
+    assert result.account_id == "acct-selfhelp-savings"
+    assert result.account_section == "self-help"
+
+
+def test_unknown_alias_still_raises(database: DatabaseManager, tmp_path: Path) -> None:
+    connection = database.connect()
+    try:
+        _seed_ally(connection)
+        connection.commit()
+    finally:
+        connection.close()
+
+    settings = _settings_for(tmp_path, database.database_path)
+    with pytest.raises(CheckpointError):
+        upsert_balance_checkpoint(
+            database,
+            settings,
+            UpsertBalanceCheckpointRequest(
+                account="nosuchbank", date=date(2026, 6, 2), balance=1.0
+            ),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Regression — the three defects from the live 2026-06-02 run
 # ---------------------------------------------------------------------------

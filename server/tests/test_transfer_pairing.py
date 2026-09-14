@@ -826,3 +826,140 @@ def test_non_ally_unpaired_transfer_stays_unpaired(database: DatabaseManager) ->
     assert result.ally_inbound_reclassified == 0
     assert {u.transaction_id for u in result.unpaired} == {"tx-other-inbound"}
     assert _fetch_directions(database)["tx-other-inbound"] == "transfer"
+
+
+# ---------------------------------------------------------------------------
+# The reclassification is re-armable, not terminal
+# ---------------------------------------------------------------------------
+
+
+def test_reclassified_row_pairs_once_its_counterpart_is_ingested(
+    database: DatabaseManager,
+) -> None:
+    """An Ally row already flipped to 'inflow' by an earlier run must come
+    back into the pairing pass when its partner finally shows up.
+
+    This is the whole reason ``pair_transfers`` re-arms: ``_resolve_pairs``
+    only ever looked at direction='transfer' rows, so a reclassified row used
+    to be permanently unpairable — and ``transaction_overrides`` has no
+    ``direction`` column, so there was no way to flip one back by hand.
+    """
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-stranded",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 1, 5),
+        amount=4500.0,
+        direction="inflow",  # a prior run's reclassification
+        description="Requested transfer from JEFFREY A ZYJESKI Ally Bank Transfer",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-selfhelp-sweep",
+        account_id="acct-selfhelp-savings",
+        occurred_on=date(2026, 1, 5),
+        amount=-4500.0,
+        direction="transfer",
+        description="ALLY BANK $TRANSFER ID:*********** **0105 S | ACH Share Withdrawal",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.inbound_rearmed == 1
+    assert result.inbound_rearmed_paired == 1
+    assert result.pairs_created == 1
+    assert result.ally_inbound_reclassified == 0
+    assert _fetch_directions(database)["tx-ally-stranded"] == "transfer"
+    keys = _fetch_keys(database)
+    assert keys["tx-ally-stranded"] == keys["tx-selfhelp-sweep"] is not None
+
+
+def test_rearm_of_a_still_unpartnered_row_is_a_no_op(
+    database: DatabaseManager,
+) -> None:
+    """A genuine external deposit gets re-armed, finds nothing, and is flipped
+    straight back — leaving the stored row exactly as it was."""
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-external",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 2, 1),
+        amount=2500.0,
+        direction="inflow",
+        description="Requested transfer from SOME EXTERNAL BANK",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.inbound_rearmed == 1
+    assert result.inbound_rearmed_paired == 0
+    assert result.pairs_created == 0
+    assert result.ally_inbound_reclassified == 1
+    assert _fetch_directions(database)["tx-ally-external"] == "inflow"
+
+    # And it stays that way, run after run.
+    again = pair_transfers(database, PairTransfersRequest())
+    assert again.pairs_created == 0
+    assert _fetch_directions(database)["tx-ally-external"] == "inflow"
+
+
+def test_rearm_leaves_rows_outside_the_reclassification_domain_alone(
+    database: DatabaseManager,
+) -> None:
+    """The re-arm is the exact inverse of the reclassification, so it must not
+    touch an inflow the reclassification would never have produced."""
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-payroll",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 3, 1),
+        amount=3000.0,
+        direction="inflow",
+        description="NOVARTIS PAYROLL DIRECT DEP",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-beacon-inbound",
+        account_id="acct-beacon",
+        occurred_on=date(2026, 3, 1),
+        amount=3000.0,
+        direction="inflow",
+        description="Requested transfer from JEFFREY A ZYJESKI",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.inbound_rearmed == 0
+    directions = _fetch_directions(database)
+    assert directions["tx-ally-payroll"] == "inflow"
+    assert directions["tx-beacon-inbound"] == "inflow"
+
+
+def test_already_paired_reclassified_row_is_not_rearmed(
+    database: DatabaseManager,
+) -> None:
+    """Settled rows stay settled: a transfer_group_key means the row is done,
+    whatever its direction says."""
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-settled",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 4, 8),
+        amount=5080.0,
+        direction="inflow",
+        description="Requested transfer from JEFFREY A ZYJESKI",
+    )
+    connection = database.connect()
+    try:
+        connection.execute(
+            "UPDATE transactions SET transfer_group_key = 'grp-settled' WHERE id = ?",
+            ("tx-ally-settled",),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.inbound_rearmed == 0
+    assert _fetch_directions(database)["tx-ally-settled"] == "inflow"
