@@ -264,8 +264,8 @@ VALUES
   -- rental spending, and names them for the register. The trailing ACH id is
   -- masked in newer exports, so the pattern stops at the "$TRANSFER" token.
   ('rule-selfhelp-ally-sweep', '(?i)ally bank \$?\s*transfer',
-   'acct-selfhelp-savings', NULL, 'transfer', NULL,
-   'Ally Sweep', 'jeff', 'recurring', 'high', 15,
+   'acct-selfhelp-savings', 'transfer', 'transfer', NULL,
+   'Ally Sweep', 'jeff', 'recurring', 'high', 5,
    'Self-Help -> Ally rent sweeps; pairs with the Ally "Requested transfer from" legs'),
 
   -- Ally's account-verification micro-deposits (+0.60, +0.46, -1.06 on
@@ -273,7 +273,7 @@ VALUES
   -- description, never by amount, so a future re-verification of any size
   -- lands the same way.
   ('rule-selfhelp-acctverify', '(?i)ally bank acctverify',
-   'acct-selfhelp-savings', NULL, 'transfer', NULL,
+   'acct-selfhelp-savings', 'transfer', 'transfer', NULL,
    'Ally Account Verification', 'jeff', 'one_time', 'high', 15,
    'Ally micro-deposit account-verification probes; net zero, not income'),
 
@@ -282,7 +282,7 @@ VALUES
   -- for 3/31 and 5/31, "Annual Percentage Yield Earned:" for 6/30, 7/31 and
   -- 8/31), so a description-text rule would catch at most three of five.
   ('rule-selfhelp-dividend', '(?i)(?:^|\|\s*)dividend\s*$',
-   'acct-selfhelp-savings', NULL, 'income', 'interest',
+   'acct-selfhelp-savings', 'inflow', 'income', 'interest',
    'Self-Help Dividend', 'jeff', 'recurring', 'high', 18,
    'Self-Help share dividends; matched on the Ext column, not description text'),
 
@@ -294,8 +294,8 @@ VALUES
   -- 2026-05) and, because it anchors on the end of the string, never matches
   -- the "ACH Share Withdrawal" sweeps.
   ('rule-selfhelp-rent', '(?i)(?:^|\|\s*)share deposit(?: transfer)?\s*$',
-   'acct-selfhelp-savings', NULL, 'income', 'rental_income',
-   '140 Kane D5 Rent', 'jeff', 'recurring', 'high', 20,
+   'acct-selfhelp-savings', 'inflow', 'rental', 'rental_income',
+   '140 Kane D5 Rent', 'rental', 'recurring', 'high', 20,
    'Rental income from the 140 Kane D5 tenant; matched on Ext, never on amount');
 
 -- Monthly cashflow rollup — CATEGORY-DRIVEN, never direction-driven. This view

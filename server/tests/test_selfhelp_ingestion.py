@@ -207,12 +207,13 @@ def test_classification_counts(
     rent = _rows(
         database,
         "SELECT amount, household_role FROM transactions WHERE account_id = ? "
-        "AND primary_category = 'income' AND subcategory = 'rental_income'",
+        "AND primary_category = 'rental' AND subcategory = 'rental_income'",
         (SELFHELP_ACCOUNT_ID,),
     )
     assert len(rent) == 9
     assert {row["amount"] for row in rent} == {1295.0}
-    assert {row["household_role"] for row in rent} == {"jeff"}
+    assert round(sum(row["amount"] for row in rent), 2) == 11655.00
+    assert {row["household_role"] for row in rent} == {"rental"}
 
     interest = _rows(
         database,
