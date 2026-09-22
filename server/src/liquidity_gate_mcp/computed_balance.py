@@ -64,15 +64,21 @@ def seed_balance_anchors(database: DatabaseManager, balances: BalancesConfig) ->
       calendar month, so a freshly added statement closing immediately becomes
       the most-recent anchor.
 
-    Non-destructive and idempotent. ``reconcile_periods`` walks every month
-    from 2025-01 forward and writes skeleton rows whose ``statement_closing_
-    balance`` is NULL whenever no statement or running balance is available
-    (true for Ally and Chase, which have no running balance in their CSVs).
-    Seeding therefore *fills a NULL closing* on an existing account/period row
-    rather than skipping it — otherwise the 12/31/2025 anchor would never
-    materialise. A row whose closing is already non-NULL (a real reconciled
-    statement) is never touched. Returns the number of rows inserted or
-    filled.
+    Idempotent. ``reconcile_periods`` walks every month from 2025-01 forward
+    and writes skeleton rows whose ``statement_closing_balance`` is NULL
+    whenever no statement or running balance is available (true for Ally and
+    Chase, which have no running balance in their CSVs). Seeding therefore
+    *fills a NULL closing* on an existing account/period row rather than
+    skipping it — otherwise the 12/31/2025 anchor would never materialise.
+
+    An existing row whose closing came from balances.toml
+    (``closing_balance_source`` of ``OPENING_SOURCE`` or ``CLOSING_SOURCE``) is
+    a copy of config, and config governs it: when the toml value differs by a
+    cent or more, its ``statement_closing_balance`` is updated to match, so a
+    corrected opening seed reaches the Dec-2025 anchor ``v_computed_balance``
+    uses. Rows produced by reconciliation (``metadata_running_balance``,
+    ``checkpoint``, and any other source) are evidence and are never
+    overwritten. Returns the number of rows inserted, filled or updated.
     """
     connection = database.connect()
     try:
@@ -133,8 +139,20 @@ def _insert_anchor(
     closing: float | None,
     source: str | None,
 ) -> int:
+    """Insert, fill or update one balances.toml anchor row; return 1 if written.
+
+    * No row for the account/period: insert one carrying ``closing``.
+    * A row with a NULL closing (a reconcile skeleton): fill it with
+      ``closing`` and stamp ``source``.
+    * A row whose closing came from balances.toml (``OPENING_SOURCE`` or
+      ``CLOSING_SOURCE``): follow the config — set ``statement_closing_balance``
+      to ``closing`` when it differs by a cent or more, leaving every other
+      column alone.
+    * Any other row (a running-balance or checkpoint closing) is never touched.
+    """
     existing = connection.execute(
-        "SELECT id, statement_closing_balance FROM reconciliation_periods "
+        "SELECT id, statement_closing_balance, closing_balance_source "
+        "FROM reconciliation_periods "
         "WHERE account_id = ? AND period_start = ? AND period_end = ?",
         (account_id, period_start, period_end),
     ).fetchone()
@@ -152,14 +170,28 @@ def _insert_anchor(
         )
         return 1
 
-    # A row exists. Never overwrite a real (non-NULL) closing — that would
-    # clobber a reconciled statement. Only fill a NULL closing with the
-    # balances.toml anchor value.
-    if existing["statement_closing_balance"] is None and closing is not None:
+    if closing is None:
+        return 0
+
+    # A row exists with a NULL closing: fill it with the balances.toml value.
+    current = existing["statement_closing_balance"]
+    if current is None:
         connection.execute(
             "UPDATE reconciliation_periods SET statement_closing_balance = ?, "
             "closing_balance_source = ? WHERE id = ?",
             (closing, source, existing["id"]),
+        )
+        return 1
+
+    # A non-NULL closing copied from balances.toml follows balances.toml. A
+    # closing from any other source came out of reconciliation and is evidence;
+    # config never overwrites it.
+    if existing["closing_balance_source"] in (OPENING_SOURCE, CLOSING_SOURCE) and round(
+        closing * 100
+    ) != round(current * 100):
+        connection.execute(
+            "UPDATE reconciliation_periods SET statement_closing_balance = ? WHERE id = ?",
+            (closing, existing["id"]),
         )
         return 1
     return 0
