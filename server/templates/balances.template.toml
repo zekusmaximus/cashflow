@@ -50,8 +50,14 @@ monthly_summary_output_dir     = "monthly_summaries"
 # and amortization is skipped, but non-scheduled IonBank debt-paydown rows (the
 # paid-off HELOC + extra-principal prepayments) are still carved out.
 #
-# Anchored to the 2026-06-17 Ion statement; any other month's principal split is
-# rolled deterministically from the anchor balance.
+# Payment matching is floor-plus-excess: a row at or above the scheduled payment
+# (less $50) is one scheduled payment, and anything more than $50 above it is
+# extra principal. An escrow re-analysis is a new [[mortgage.ion.schedule]]
+# tier; the standing $4,200.00 payment is NOT a tier (it is the regular payment
+# plus excess principal).
+#
+# When the schedule / anchor arrays below are present they govern and the flat
+# payment / anchor keys are ignored (kept for older loaders).
 [mortgage.ion]
 merchant_match         = "IonBank Mortgage"  # matches transactions.merchant_normalized
 scheduled_payment      = 4044.66             # the recurring monthly mortgage row
@@ -60,3 +66,35 @@ escrow                 = 1432.83             # taxes+insurance portion (payment 
 annual_rate            = 0.04625             # 4.625%, fixed until Aug 2032
 anchor_date            = "2026-06-17"        # statement date
 anchor_balance         = 475016.69           # outstanding principal at anchor_date
+
+# Effective-dated payment schedule. A row dated D uses the tier with the
+# greatest effective_from <= D (before the first tier: the first tier). Dates
+# must be strictly ascending.
+[[mortgage.ion.schedule]]
+effective_from         = "2026-01-01"
+scheduled_payment      = 4044.66
+principal_and_interest = 2611.83
+escrow                 = 1432.83
+
+[[mortgage.ion.schedule]]
+effective_from         = "2026-09-01"
+scheduled_payment      = 4102.65
+principal_and_interest = 2611.83        # P&I does not change on an escrow re-analysis
+escrow                 = 1490.82        # confirmed by the 2026-09-17 statement
+
+# Balance anchors, one per servicer statement, recorded exactly as printed. A
+# statement dated month M reports the balance from which the month M+1 payment
+# is computed, so each anchor governs from the month AFTER statement_date.
+# Append one from every Ion statement: it absorbs any extra principal paid since
+# the previous statement. Strictly ascending, at most one per month.
+[[mortgage.ion.anchor]]
+statement_date = "2026-06-17"   # governs from 2026-07
+balance        = 475016.69
+
+[[mortgage.ion.anchor]]
+statement_date = "2026-08-18"   # governs from 2026-09
+balance        = 472996.26
+
+[[mortgage.ion.anchor]]
+statement_date = "2026-09-17"   # governs from 2026-10
+balance        = 472110.09

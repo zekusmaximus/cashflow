@@ -24,7 +24,7 @@ import logging
 import math
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -71,12 +71,21 @@ SPEND_OFFSET_CATEGORIES: tuple[str, ...] = (
     "fixed_obligation",
 )
 
-# Scheduled-mortgage identification tolerance. The scheduled payment amount is
-# matched within ±$50 of `scheduled_payment` so a future escrow re-analysis that
-# nudges the payment does not silently drop the row (audit open question:
-# "escrow drift"). Rows outside the tolerance are treated as non-scheduled
-# IonBank debt paydown (the paid-off HELOC + irregular extra-principal
-# prepayments — all historical Jan–Jun 2026).
+# Scheduled-mortgage identification tolerance, applied as floor-plus-excess
+# against the scheduled payment in effect for the row's date (the
+# `[[mortgage.ion.schedule]]` tier, or the flat `scheduled_payment`):
+#
+#   * A row at or above `scheduled_payment - tolerance` is one scheduled
+#     occurrence. Anything above the scheduled payment is extra principal and is
+#     booked as non-scheduled debt paydown — but only when the excess itself
+#     exceeds the tolerance, so a payment a few dollars off is rounding, not a
+#     prepayment. (Jeff's standing $4,200.00 = $4,102.65 scheduled + $97.35
+#     excess principal from 2026-09.)
+#   * A row below the floor is 100% non-scheduled IonBank debt paydown (the
+#     paid-off HELOC — all historical Jan–Jun 2026).
+#
+# An escrow re-analysis is a new schedule tier, not excess; see
+# `MortgageConfig.tier_for`.
 _MORTGAGE_MATCH_TOLERANCE = 50.0
 
 # Used only when the `[mortgage.ion]` config block is absent: still identify and
@@ -417,23 +426,25 @@ def _mortgage_principal(
 ) -> tuple[float, float, float]:
     """Debt-paydown carve-out for [start, end) as ``(total, scheduled, nonscheduled)``.
 
-    ``scheduled`` is the amortized principal portion of the recurring IonBank
-    mortgage payment, counted only when a scheduled row actually posted this
-    month (a row matching ``merchant_match`` within ±$50 of ``scheduled_payment``).
-    Escrow + interest of that payment stay in ``fixed_obligations`` — only
-    principal is carved out. ``nonscheduled`` is the full amount of every other
-    IonBank ``fixed_obligation`` row (the paid-off HELOC + extra-principal
-    prepayments), treated as 100% debt paydown per the audit default.
+    Each IonBank ``fixed_obligation`` row is tested against the scheduled
+    payment ``SP`` in effect on its date (floor-plus-excess, see
+    ``_MORTGAGE_MATCH_TOLERANCE``). A row with ``amount >= SP - tolerance`` is one
+    scheduled occurrence; its excess ``amount - SP`` is added to
+    ``nonscheduled`` only when it exceeds the tolerance. A row below the floor
+    is 100% ``nonscheduled`` (the paid-off HELOC), per the audit default.
+
+    ``scheduled`` is the amortized principal portion of the scheduled payment
+    times the number of scheduled occurrences. Escrow + interest stay in
+    ``fixed_obligations`` — only principal is carved out.
 
     Without a config block the scheduled portion is 0 (no anchor to amortize
-    from) but non-scheduled rows are still carved out using fallback
-    identification constants.
+    from) but floor-plus-excess still runs against the fallback payment, so
+    below-floor rows and material excess are carved out.
     """
     merchant = mortgage.merchant_match if mortgage else _FALLBACK_MORTGAGE_MERCHANT
-    scheduled_amount = mortgage.scheduled_payment if mortgage else _FALLBACK_SCHEDULED_PAYMENT
 
     rows = connection.execute(
-        "SELECT amount FROM transactions "
+        "SELECT amount, occurred_on FROM transactions "
         "WHERE merchant_normalized = ? AND primary_category = 'fixed_obligation' "
         "AND direction != 'inflow' AND occurred_on >= ? AND occurred_on < ?",
         (merchant, start, end),
@@ -441,10 +452,23 @@ def _mortgage_principal(
 
     scheduled_count = 0
     nonscheduled = 0.0
+    floors: set[float] = set()
     for row in rows:
         amount = abs(float(row["amount"]))
-        if abs(amount - scheduled_amount) <= _MORTGAGE_MATCH_TOLERANCE:
+        if mortgage is not None:
+            scheduled_amount = mortgage.tier_for(
+                date.fromisoformat(str(row["occurred_on"])[:10])
+            ).scheduled_payment
+        else:
+            scheduled_amount = _FALLBACK_SCHEDULED_PAYMENT
+        floors.add(scheduled_amount)
+        # Compare in whole cents so a boundary amount is not decided by float
+        # noise (e.g. a row exactly $50.00 above or below the payment).
+        excess = round(amount - scheduled_amount, 2)
+        if excess >= -_MORTGAGE_MATCH_TOLERANCE:
             scheduled_count += 1
+            if excess > _MORTGAGE_MATCH_TOLERANCE:
+                nonscheduled += excess
         else:
             nonscheduled += amount
 
@@ -454,17 +478,18 @@ def _mortgage_principal(
             mortgage.amortized_principal(year, month) * scheduled_count, 2
         )
     elif rows and scheduled_count == 0 and mortgage is not None:
-        # IonBank activity this month but nothing matched the scheduled payment —
-        # escrow drift may have moved the amount outside tolerance. Surface it so
-        # the carve-out can be reconciled rather than silently under-counted.
+        # IonBank activity this month but nothing cleared the scheduled-payment
+        # floor — a missed payment, or a payment change not yet in the schedule.
+        # Surface it so the carve-out can be reconciled rather than silently
+        # under-counted.
         logger.warning(
             "[monthly-summary] %04d-%02d: IonBank fixed_obligation rows present "
-            "but none matched the scheduled payment $%.2f (±$%.0f). Scheduled "
-            "mortgage principal counted as $0 for the month; check for escrow "
-            "drift in the payment amount.",
+            "but none cleared the scheduled-payment floor (%s less $%.0f). "
+            "Scheduled mortgage principal counted as $0 for the month; check "
+            "for a payment change missing from [[mortgage.ion.schedule]].",
             year,
             month,
-            scheduled_amount,
+            " / ".join(f"${v:.2f}" for v in sorted(floors)),
             _MORTGAGE_MATCH_TOLERANCE,
         )
 
