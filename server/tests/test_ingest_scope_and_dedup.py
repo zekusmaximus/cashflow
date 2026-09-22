@@ -175,3 +175,47 @@ def test_genuine_same_day_duplicates_survive_dedup(tmp_path: Path, database: Dat
     )
     assert rows == 2
     assert _count(database, "SELECT COUNT(*) FROM transactions") == 2
+
+
+# ---------------------------------------------------------------------------
+# Partial overrides survive a re-ingest
+# ---------------------------------------------------------------------------
+
+
+def test_lifecycle_only_override_survives_reingest(
+    tmp_path: Path, database: DatabaseManager, schema_path: Path
+) -> None:
+    """Re-ingesting a file re-parses its rows as ``unclassified``; the stored
+    override applies only its non-null field (lifecycle), so the classifier pass
+    at the end of the ingest selects the row and stamps the rule's lifecycle.
+    The override must be re-applied after that pass."""
+    from liquidity_gate_mcp.models import UpsertTransactionOverrideRequest
+
+    root = tmp_path / "watch"
+    settings = _make_settings(root, database, schema_path)
+    purchase = '4/24/2026,4/25/2026,"AMAZON MKTPL*AB12CD",Shopping,Sale,-1300.00,\n'
+    _write(root, "2026-04_Chase_Credit_Card.csv", purchase)
+    ingest_watch_root(settings, database)
+
+    connection = database.connect()
+    try:
+        tx_id = connection.execute("SELECT id FROM transactions").fetchone()[0]
+    finally:
+        connection.close()
+    database.upsert_transaction_override(
+        UpsertTransactionOverrideRequest(transaction_id=tx_id, lifecycle="one_time")
+    )
+
+    ingest_watch_root(settings, database)
+
+    connection = database.connect()
+    try:
+        row = connection.execute(
+            "SELECT primary_category, lifecycle, metadata_json FROM transactions WHERE id = ?",
+            (tx_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row["primary_category"] == "variable_lifestyle"
+    assert row["lifecycle"] == "one_time"
+    assert '"manual_override_applied": true' in row["metadata_json"]

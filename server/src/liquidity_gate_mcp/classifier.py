@@ -57,16 +57,44 @@ def apply_classifier(
     By default only touches rows where `primary_category = 'unclassified'`.
     Pass `reclassify_all=True` to re-run on all rows (manual overrides are
     still protected).
+
+    When the pass writes any row, every stored override is re-applied once the
+    classifier's own connection has committed and closed
+    (``DatabaseManager.reapply_all_overrides``). The default scope needs this:
+    a re-ingested row carrying a *partial* override (e.g. lifecycle only) is
+    still ``unclassified``, so it is selected here and ``_classify_row`` stamps
+    every rule field over the override's — the ``reclassify_all`` skip never
+    runs for it. Re-applying afterwards makes the override win on every path
+    (``ingest_watch_root``, the ``apply_classifier`` MCP tool, the CLI). Dry
+    runs write nothing and skip it.
     """
-    with database.connect() as conn:
+    result, wrote_rows = _run_classifier(database, request)
+    if wrote_rows:
+        database.reapply_all_overrides()
+    return result
+
+
+def _run_classifier(
+    database: DatabaseManager,
+    request: ApplyClassifierRequest,
+) -> tuple[ApplyClassifierResult, bool]:
+    """One classify pass on its own connection, closed before returning.
+
+    Returns the result and whether any transaction row was written.
+    """
+    conn = database.connect()
+    try:
         rules = _load_rules(conn)
         if not rules:
-            return ApplyClassifierResult(
-                transactions_scanned=0,
-                transactions_matched=0,
-                transactions_unclassified=0,
-                dry_run=request.dry_run,
-                rules_applied=0,
+            return (
+                ApplyClassifierResult(
+                    transactions_scanned=0,
+                    transactions_matched=0,
+                    transactions_unclassified=0,
+                    dry_run=request.dry_run,
+                    rules_applied=0,
+                ),
+                False,
             )
 
         compiled = [(rule, re.compile(rule.pattern, re.IGNORECASE)) for rule in rules]
@@ -120,7 +148,8 @@ def apply_classifier(
                 updates.append({"id": row_dict["id"], **update})
                 matched += 1
 
-        if not request.dry_run and updates:
+        wrote_rows = not request.dry_run and bool(updates)
+        if wrote_rows:
             for update in updates:
                 set_clauses: list[str] = []
                 set_params: list[Any] = []
@@ -139,13 +168,21 @@ def apply_classifier(
                     )
             conn.commit()
 
-        return ApplyClassifierResult(
-            transactions_scanned=len(rows),
-            transactions_matched=matched,
-            transactions_unclassified=len(rows) - matched,
-            dry_run=request.dry_run,
-            rules_applied=len(rules),
+        return (
+            ApplyClassifierResult(
+                transactions_scanned=len(rows),
+                transactions_matched=matched,
+                transactions_unclassified=len(rows) - matched,
+                dry_run=request.dry_run,
+                rules_applied=len(rules),
+            ),
+            wrote_rows,
         )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def upsert_classification_rule(
