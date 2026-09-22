@@ -33,7 +33,13 @@ def _insert_transaction(
     amount: float,
     direction: str,
     description: str = "",
+    primary_category: str = "transfer",
 ) -> None:
+    # primary_category defaults to 'transfer': that is the state pair_transfers
+    # sees in production (ingest runs the classifier first, whose catchall
+    # stamps every direction='transfer' row 'transfer', and a reclassified Ally
+    # inbound keeps the category through its flip to 'inflow'). The pairing
+    # pass only considers transfer-category rows.
     connection = database.connect()
     try:
         _seed_account(connection, account_id)
@@ -48,7 +54,7 @@ def _insert_transaction(
               primary_category, subcategory, household_role, lifecycle,
               transfer_group_key, statement_period, metadata_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'USD',
-                      'unclassified', NULL, 'joint', 'recurring',
+                      ?, NULL, 'joint', 'recurring',
                       NULL, NULL, '{}')
             """,
             (
@@ -62,6 +68,7 @@ def _insert_transaction(
                 description or f"row {transaction_id}",
                 amount,
                 direction,
+                primary_category,
             ),
         )
         connection.commit()
@@ -963,3 +970,165 @@ def test_already_paired_reclassified_row_is_not_rearmed(
 
     assert result.inbound_rearmed == 0
     assert _fetch_directions(database)["tx-ally-settled"] == "inflow"
+
+
+# ---------------------------------------------------------------------------
+# Candidate set: opposite signs, transfer-category rows only
+# ---------------------------------------------------------------------------
+
+
+def test_same_sign_rows_on_different_accounts_do_not_pair(
+    database: DatabaseManager,
+) -> None:
+    """The 2026-04-03 Chase +5,000 / 2026-04-06 Beacon +5,000 shape: two credits
+    are never two legs of one transfer, however close their dates."""
+    _insert_transaction(
+        database,
+        transaction_id="tx-chase-credit",
+        account_id="acct-chase",
+        occurred_on=date(2026, 4, 3),
+        amount=5000.0,
+        direction="transfer",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-beacon-credit",
+        account_id="acct-beacon",
+        occurred_on=date(2026, 4, 4),
+        amount=5000.0,
+        direction="transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+    assert result.candidates_examined == 2
+    assert result.ambiguous == []
+    assert {u.transaction_id for u in result.unpaired} == {
+        "tx-chase-credit",
+        "tx-beacon-credit",
+    }
+    keys = _fetch_keys(database)
+    assert keys["tx-chase-credit"] is None and keys["tx-beacon-credit"] is None
+
+
+def test_closer_same_sign_row_does_not_steal_the_opposite_sign_partner(
+    database: DatabaseManager,
+) -> None:
+    """Without the sign test the same-day same-sign row was each credit's unique
+    best partner and the two credits paired with each other."""
+    _insert_transaction(
+        database,
+        transaction_id="tx-credit-a",
+        account_id="acct-a",
+        occurred_on=date(2026, 4, 15),
+        amount=500.0,
+        direction="transfer",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-credit-b",
+        account_id="acct-b",
+        occurred_on=date(2026, 4, 15),
+        amount=500.0,
+        direction="transfer",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-debit-c",
+        account_id="acct-c",
+        occurred_on=date(2026, 4, 16),
+        amount=-500.0,
+        direction="transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+    ambiguous = {a.transaction_id: set(a.candidates) for a in result.ambiguous}
+    assert ambiguous["tx-debit-c"] == {"tx-credit-a", "tx-credit-b"}
+    keys = _fetch_keys(database)
+    assert keys["tx-credit-a"] is None and keys["tx-credit-b"] is None
+
+
+def test_fixed_obligation_transfer_direction_row_is_not_a_candidate(
+    database: DatabaseManager,
+) -> None:
+    """IonBank mortgage rows are direction='transfer' but fixed_obligation
+    spending (DL-2026-06-10-A): even a perfect opposite-sign partner on another
+    account must not pair with one."""
+    _insert_transaction(
+        database,
+        transaction_id="tx-ionbank",
+        account_id="acct-beacon",
+        occurred_on=date(2026, 8, 1),
+        amount=-4102.65,
+        direction="transfer",
+        description="IONBANK MORTGAGE PMT",
+        primary_category="fixed_obligation",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-inbound",
+        account_id="acct-webster",
+        occurred_on=date(2026, 8, 1),
+        amount=4102.65,
+        direction="transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+    assert result.candidates_examined == 1
+    assert {u.transaction_id for u in result.unpaired} == {"tx-inbound"}
+    assert _fetch_keys(database)["tx-ionbank"] is None
+
+
+def test_unclassified_transfer_direction_row_is_not_a_candidate(
+    database: DatabaseManager,
+) -> None:
+    _insert_transaction(
+        database,
+        transaction_id="tx-out",
+        account_id="acct-a",
+        occurred_on=date(2026, 5, 1),
+        amount=-250.0,
+        direction="transfer",
+        primary_category="unclassified",
+    )
+    _insert_transaction(
+        database,
+        transaction_id="tx-in",
+        account_id="acct-b",
+        occurred_on=date(2026, 5, 1),
+        amount=250.0,
+        direction="transfer",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.pairs_created == 0
+    assert result.candidates_examined == 1
+
+
+def test_rearm_skips_an_inbound_row_outside_the_transfer_category(
+    database: DatabaseManager,
+) -> None:
+    """A row the candidate filter would drop must not be re-armed either:
+    it would be written back as 'transfer' with nothing to flip it back."""
+    _insert_transaction(
+        database,
+        transaction_id="tx-ally-income",
+        account_id="acct-ally-hysa",
+        occurred_on=date(2026, 5, 4),
+        amount=8000.0,
+        direction="inflow",
+        description="Requested transfer from JEFFREY A ZYJESKI",
+        primary_category="income",
+    )
+
+    result = pair_transfers(database, PairTransfersRequest())
+
+    assert result.inbound_rearmed == 0
+    assert result.candidates_examined == 0
+    assert _fetch_directions(database)["tx-ally-income"] == "inflow"

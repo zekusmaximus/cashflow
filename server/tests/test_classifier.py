@@ -43,7 +43,7 @@ def _insert_transaction(
         )
         conn.execute(
             """
-            INSERT INTO import_batches (id, source_name, parser_version, imported_at, raw_payload)
+            INSERT OR IGNORE INTO import_batches (id, source_name, parser_version, imported_at, raw_payload)
             VALUES ('batch-001', 'test.csv', 'test-v1', '2026-01-01T00:00:00Z', '{}')
             """,
         )
@@ -463,3 +463,93 @@ def test_already_classified_rows_skipped_by_default(database: DatabaseManager) -
     # reclassify_all=False means only 'unclassified' rows are touched
     assert result.transactions_scanned == 0
     assert result.transactions_matched == 0
+
+
+# ---------------------------------------------------------------------------
+# Overrides are re-applied after every classification pass that writes
+# ---------------------------------------------------------------------------
+
+
+def _override(database: DatabaseManager, tx_id: str, **fields: str) -> None:
+    from liquidity_gate_mcp.models import UpsertTransactionOverrideRequest
+
+    database.upsert_transaction_override(
+        UpsertTransactionOverrideRequest(transaction_id=tx_id, **fields)
+    )
+
+
+def test_lifecycle_only_override_survives_default_scope_pass(
+    database: DatabaseManager,
+) -> None:
+    """The 2026-05-28 lifecycle-audit shape: an override that sets only
+    ``lifecycle`` leaves the row ``unclassified``, so the default-scope pass
+    selects it and the rule stamps ``recurring`` over the override."""
+    _insert_transaction(database, description_raw="AMAZON MARKETPLACE")
+    _override(database, "tx-001", lifecycle="one_time")
+    assert _fetch_transaction(database, "tx-001")["primary_category"] == "unclassified"
+
+    result = apply_classifier(database, ApplyClassifierRequest(reclassify_all=False))
+
+    assert result.transactions_matched == 1
+    tx = _fetch_transaction(database, "tx-001")
+    assert tx["primary_category"] == "variable_lifestyle"  # rule fields land
+    assert tx["lifecycle"] == "one_time"  # override wins
+
+
+def test_lifecycle_only_override_survives_reclassify_all(
+    database: DatabaseManager,
+) -> None:
+    _insert_transaction(database, description_raw="AMAZON MARKETPLACE")
+    apply_classifier(database, ApplyClassifierRequest())
+    _override(database, "tx-001", lifecycle="one_time")
+    # A second, non-overridden row so the pass writes something.
+    _insert_transaction(database, tx_id="tx-002", description_raw="WHOLEFDS #123")
+
+    apply_classifier(database, ApplyClassifierRequest(reclassify_all=True))
+
+    assert _fetch_transaction(database, "tx-001")["lifecycle"] == "one_time"
+    assert _fetch_transaction(database, "tx-002")["subcategory"] == "groceries"
+
+
+def test_full_field_override_unaffected_by_reapply(database: DatabaseManager) -> None:
+    _insert_transaction(database, description_raw="AMAZON MARKETPLACE")
+    _override(
+        database,
+        "tx-001",
+        primary_category="medical",
+        subcategory="durable_medical_equipment",
+        merchant_normalized="Amazon (CPAP)",
+        household_role="jeff",
+        lifecycle="one_time",
+    )
+    _insert_transaction(database, tx_id="tx-002", description_raw="WHOLEFDS #123")
+
+    apply_classifier(database, ApplyClassifierRequest())
+    apply_classifier(database, ApplyClassifierRequest(reclassify_all=True))
+
+    tx = _fetch_transaction(database, "tx-001")
+    assert (
+        tx["primary_category"],
+        tx["subcategory"],
+        tx["merchant_normalized"],
+        tx["household_role"],
+        tx["lifecycle"],
+    ) == ("medical", "durable_medical_equipment", "Amazon (CPAP)", "jeff", "one_time")
+
+
+def test_dry_run_does_not_reapply_overrides(
+    database: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _insert_transaction(database, description_raw="AMAZON MARKETPLACE")
+    _override(database, "tx-001", lifecycle="one_time")
+    before = _fetch_transaction(database, "tx-001")
+
+    calls: list[int] = []
+    monkeypatch.setattr(
+        DatabaseManager, "reapply_all_overrides", lambda self: calls.append(1) or 0
+    )
+    result = apply_classifier(database, ApplyClassifierRequest(dry_run=True))
+
+    assert result.transactions_matched == 1
+    assert calls == []
+    assert _fetch_transaction(database, "tx-001") == before

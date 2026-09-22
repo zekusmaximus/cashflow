@@ -658,3 +658,81 @@ class GetAnnualReferenceResult(BaseModel):
     source_path: str
     file_exists: bool
     entries: list[AnnualReferenceEntry] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# verify_state — read-only post-ingest verification
+# ---------------------------------------------------------------------------
+
+
+VerifyCheckStatus = Literal["pass", "info", "warn", "fail", "error"]
+
+
+class VerifyStateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Write STATUS_DATA.md and _state_exports/ in the watch root. Never the DB.
+    write: bool = False
+    # "YYYY-MM" to run the completeness checks for; None = latest complete month.
+    month: str | None = None
+    # Optional subset by check key; empty = every check.
+    checks: list[str] = Field(default_factory=list)
+
+    @field_validator("month", mode="before")
+    @classmethod
+    def validate_month(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        parts = text.split("-")
+        if (
+            len(parts) != 2
+            or len(parts[0]) != 4
+            or len(parts[1]) != 2
+            or not parts[0].isdigit()
+            or not parts[1].isdigit()
+            or not 1 <= int(parts[1]) <= 12
+        ):
+            raise ValueError(f"month must be 'YYYY-MM', got {value!r}")
+        return text
+
+
+class VerifyCheckResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    family: str
+    status: VerifyCheckStatus
+    summary: str
+    # Rows or findings, capped at 50; ``details_total`` is the uncapped count.
+    details: list[dict[str, Any]] = Field(default_factory=list)
+    details_total: int = 0
+    # [[benign]] entry ids that suppressed at least one finding of this check.
+    suppressed_by: list[str] = Field(default_factory=list)
+
+
+class VerifyStateWritten(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status_data: str | None = None
+    exports: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class VerifyStateResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: str
+    as_of_month: str | None = None
+    # Worst of fail > warn > pass; info never raises it; a check "error" counts
+    # as fail. "error" only when the run itself could not start (e.g. a
+    # malformed verify_state.toml) — see ``error``.
+    status: Literal["pass", "warn", "fail", "error"]
+    counts: dict[str, int] = Field(default_factory=dict)
+    checks: list[VerifyCheckResult] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    report_markdown: str = ""
+    written: VerifyStateWritten | None = None
+    error: str | None = None

@@ -51,23 +51,28 @@ def merge_manual_override_metadata(metadata: dict[str, Any], note: str) -> dict[
     return merged
 
 
+# The authoritative override identity: a ``transaction_overrides`` row (aliased
+# ``o``) governs a ``transactions`` row (unaliased) when the
+# ``(account_id, occurred_on, amount, description_raw)`` tuple matches — never the
+# derived SHA-256 ``match_key``, whose description-normalization drift is exactly
+# what made the original backfill miss rows (DL-2026-06-02-A). Shared by the stamp
+# below and the read-only override checks in ``verify_state``.
+OVERRIDE_TUPLE_MATCH_SQL = """o.account_id      = transactions.account_id
+    AND o.occurred_on     = transactions.occurred_on
+    AND o.amount          = transactions.amount
+    AND o.description_raw = transactions.description_raw"""
+
 # Set-based stamp of ``metadata_json.manual_override_applied`` on every
-# transaction that matches a stored override tuple. Matched on the authoritative
-# ``(account_id, occurred_on, amount, description_raw)`` columns of
-# ``transaction_overrides`` — never the derived SHA-256 ``match_key``, whose
-# description-normalization drift is exactly what made the original backfill miss
-# rows. The trailing flag check makes re-runs no-ops (idempotent).
-STAMP_OVERRIDE_FLAGS_SQL = """
+# transaction that matches a stored override tuple (``OVERRIDE_TUPLE_MATCH_SQL``).
+# The trailing flag check makes re-runs no-ops (idempotent).
+STAMP_OVERRIDE_FLAGS_SQL = f"""
 UPDATE transactions
 SET metadata_json = json_set(
-      COALESCE(metadata_json, '{}'),
+      COALESCE(metadata_json, '{{}}'),
       '$.manual_override_applied', json('true'))
 WHERE EXISTS (
   SELECT 1 FROM transaction_overrides o
-  WHERE o.account_id      = transactions.account_id
-    AND o.occurred_on     = transactions.occurred_on
-    AND o.amount          = transactions.amount
-    AND o.description_raw = transactions.description_raw
+  WHERE {OVERRIDE_TUPLE_MATCH_SQL}
 )
 AND COALESCE(
       json_extract(metadata_json, '$.manual_override_applied'),

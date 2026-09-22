@@ -46,6 +46,7 @@ class _Row:
     occurred_on: date
     amount: float
     direction: str
+    primary_category: str
     description: str
     transfer_group_key: str | None
 
@@ -104,11 +105,16 @@ def _rearm_reclassified_inbound(rows: list[_Row]) -> tuple[list[_Row], set[str]]
     rows once and leave the one-way door in place for the next account.
 
     Returns the re-armed rows (mutated copies) and their ids. Rows already
-    carrying a ``transfer_group_key`` are left alone — those are settled.
+    carrying a ``transfer_group_key`` are left alone — those are settled — and
+    so are rows whose ``primary_category`` is not ``transfer``: they could not
+    enter the candidate set (see ``_is_pairing_candidate``), so re-arming one
+    would flip it to 'transfer' with nothing to flip it back.
     """
     rearmed: list[_Row] = []
     for index, row in enumerate(rows):
         if row.direction != "inflow" or row.transfer_group_key is not None:
+            continue
+        if row.primary_category != "transfer":
             continue
         if not _is_reclassifiable_inbound(row):
             continue
@@ -118,15 +124,33 @@ def _rearm_reclassified_inbound(rows: list[_Row]) -> tuple[list[_Row], set[str]]
     return rearmed, {row.id for row in rearmed}
 
 
+def _is_pairing_candidate(row: _Row) -> bool:
+    """True for an unpaired row the pairing pass may match.
+
+    Both sides of a transfer are owned liquid assets, so a candidate must be
+    ``direction='transfer'`` AND ``primary_category='transfer'``. Direction
+    alone is not enough: the IonBank mortgage rows carry
+    ``direction='transfer'`` from the parser but are ``fixed_obligation``
+    spending (DL-2026-06-10-A) — a payee, never a pairing partner.
+    """
+    return (
+        row.transfer_group_key is None
+        and row.direction == "transfer"
+        and row.primary_category == "transfer"
+    )
+
+
 def pair_transfers(
     database: DatabaseManager, request: PairTransfersRequest
 ) -> PairTransfersResult:
-    """Pair direction='transfer' rows across accounts by amount + date.
+    """Pair transfer rows across accounts by amount + date.
 
-    The primary rule is mutual-best-match: a pair forms only when each row
-    sees the other as its unique closest cross-account partner. After that
-    pass, a cluster fallback handles the N-vs-N case (e.g. five same-day
-    $5K Webster -> Beacon transfers): if a cents bucket contains exactly
+    Candidates are ``direction='transfer'`` rows whose ``primary_category`` is
+    ``transfer`` (see ``_is_pairing_candidate``), and a partner must carry the
+    opposite sign. The primary rule is mutual-best-match: a pair forms only
+    when each row sees the other as its unique closest cross-account partner.
+    After that pass, a cluster fallback handles the N-vs-N case (e.g. five
+    same-day $5K Webster -> Beacon transfers): if a cents bucket contains exactly
     two accounts with equal row counts, opposite signs, and each row's
     best_partners equals the full other side, the cluster pairs 1-to-1 by
     stable id-sort. Any deterministic pairing is correct since the rows
@@ -146,11 +170,7 @@ def pair_transfers(
         # candidates, so rows stranded as 'inflow' get another chance to pair.
         rearmed_rows, rearmed_ids = _rearm_reclassified_inbound(rows)
 
-        candidates = [
-            r
-            for r in rows
-            if r.transfer_group_key is None and r.direction == "transfer"
-        ]
+        candidates = [r for r in rows if _is_pairing_candidate(r)]
         non_transfers = [r for r in rows if r.direction != "transfer"]
 
         pairings, unpaired_raw, ambiguous = _resolve_pairs(
@@ -233,7 +253,7 @@ def pair_transfers(
 def _load_rows(connection: sqlite3.Connection) -> list[_Row]:
     cursor = connection.execute(
         "SELECT id, account_id, occurred_on, amount, direction, "
-        "description_raw, transfer_group_key FROM transactions"
+        "primary_category, description_raw, transfer_group_key FROM transactions"
     )
     out: list[_Row] = []
     for row in cursor.fetchall():
@@ -244,6 +264,7 @@ def _load_rows(connection: sqlite3.Connection) -> list[_Row]:
                 occurred_on=date.fromisoformat(row["occurred_on"]),
                 amount=float(row["amount"]),
                 direction=row["direction"],
+                primary_category=row["primary_category"],
                 description=row["description_raw"],
                 transfer_group_key=row["transfer_group_key"],
             )
@@ -277,6 +298,11 @@ def _resolve_pairs(
                 continue
             if partner.account_id == row.account_id:
                 same_account_hits[row.id].append(partner.id)
+                continue
+            if partner.amount * row.amount >= 0:
+                # Same sign: one leg of a transfer debits, the other credits,
+                # so a same-sign row is never a partner (DL-2026-09-14-B's
+                # "opposite signs" containment for the 5-day window).
                 continue
             cross_account.append((delta, partner))
 

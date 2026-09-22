@@ -35,6 +35,7 @@ from .models import (
     UpsertBalanceCheckpointRequest,
     UpsertClassificationRuleRequest,
     UpsertTransactionOverrideRequest,
+    VerifyStateRequest,
 )
 from .reconciliation import reconcile_periods as reconcile_periods_impl
 from .tools import (
@@ -51,6 +52,7 @@ from .tools import (
     upsert_transaction_override as upsert_transaction_override_impl,
 )
 from .transfers import pair_transfers as pair_transfers_impl
+from .verify_state import verify_state as verify_state_impl
 from .watcher import CashFlowWatcher
 
 logger = logging.getLogger("liquidity_gate_mcp")
@@ -347,6 +349,46 @@ def list_lifecycle_audit_candidates(request: dict | None = None) -> dict:
     """
     parsed_request = LifecycleAuditRequest.model_validate(request or {})
     return list_lifecycle_audit_candidates_impl(database, parsed_request).model_dump()
+
+
+@mcp.tool()
+def verify_state(request: dict | None = None) -> dict:
+    """Run every post-ingest check in one call — read-only against the database.
+
+    Run it last in the monthly cycle: ``ingest_documents`` → ``pair_transfers``
+    → ``reconcile_periods`` → ``verify_state``. It replaces the hand-run
+    checklist in the watch root's ``MONTHLY_RUNBOOK.md`` (step 6/6a).
+
+    The database is never written, in either mode: the tool reads on a
+    read-only connection and recomputes summaries through the pure compute
+    paths only. It never ingests, classifies, pairs, reconciles or regenerates
+    anything — it reports, and the fixes stay yours.
+
+    Optional keys inside *request*:
+
+    - ``write`` (bool, default ``false``): also write ``<watch_root>/STATUS_DATA.md``
+      (the generated data block for ``STATUS.md``) and ``<watch_root>/_state_exports/``
+      (``transaction_overrides.csv`` and ``classification_rules.csv`` — the
+      disaster-recovery copy of state that exists only in the database, restored
+      by ``scripts/restore_state_from_export.py`` — plus
+      ``verify_state_YYYY-MM-DD.md``). Nothing else is touched.
+    - ``month`` (``"YYYY-MM"``): month for the completeness checks. Default: the
+      latest complete month (the earliest latest-month of the anchor accounts).
+    - ``checks`` (list of check keys): run a subset; empty runs all.
+
+    Configuration: ``<watch_root>/verify_state.toml`` (falls back to
+    ``server/templates/verify_state.template.toml`` when absent; a malformed file
+    returns ``status: "error"``). ``[[benign]]`` entries suppress known-benign
+    findings of one check until their exact-match falsifiers stop holding.
+
+    Returns ``status`` (worst of fail > warn > pass; info never raises it; a
+    check that errors counts as fail), ``counts``, one entry per check under
+    ``checks`` (``key``, ``family``, ``status`` pass/info/warn/fail/error,
+    ``summary``, ``details`` capped at 50 with ``details_total``,
+    ``suppressed_by``), ``metrics``, ``report_markdown`` and ``written``.
+    """
+    parsed_request = VerifyStateRequest.model_validate(request or {})
+    return verify_state_impl(settings, database, parsed_request).model_dump()
 
 
 @mcp.tool()
