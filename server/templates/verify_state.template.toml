@@ -1,0 +1,95 @@
+# verify_state configuration. Read by the verify_state MCP tool; edited by hand.
+
+[completeness]
+# The latest complete month is the earliest of these accounts' latest months.
+anchor_accounts = ["acct-beacon-dp-876321032", "acct-chase-credit-card"]
+# Life-of-account exports are exempt from the tail-gap and early-download checks.
+life_of_account_files = ["SelfHelp_FCU_Rental_Transactions_LifeOfAccount.csv"]
+# A card payment on a checking account whose description matches one of these must pair.
+card_payment_patterns = ["(?i)chase credit crd", "(?i)citi autopay", "(?i)cardmember"]
+
+[completeness.tail_gap_days]
+# Max days between a dated monthly file's last row and month-end. Accounts not listed
+# (Ally, Citi: low activity) get no tail-gap or early-download check.
+"acct-beacon-dp-876321032" = 5
+"acct-chase-credit-card" = 5
+"acct-webster-checking" = 10
+
+[[recurring_income]]
+name = "Jeff monthly paycheck"
+account_id = "acct-beacon-dp-876321032"
+description_pattern = "(?i)^mobile check dep"
+min_amount = 4000.00
+max_amount = 7000.00        # excludes bonus deposits
+min_per_month = 1
+expected_subcategory = "paycheck"
+expected_household_role = "jeff"
+
+[[recurring_income]]
+name = "Ashley Novartis payroll"
+account_id = "acct-webster-checking"
+description_pattern = "(?i)novartis service payroll"
+min_amount = 1000.00        # excludes the $50 NOVARTIS EDI PAYMNT rows
+min_per_month = 2
+expected_subcategory = "payroll"
+expected_household_role = "ashley"
+
+[rules]
+# Spend-category rules allowed to omit direction_filter='outflow' (documented exceptions).
+spend_direction_exceptions = ["rule-ionbank-mortgage", "rule-amazon", "rule-whole-foods", "rule-zara", "rule-refund-inflow"]
+
+[taxonomy.aliases]
+# alias = canonical. Rows still using the alias are reported.
+dining = "dining_out"
+shopping = "shopping_misc"
+
+[taxonomy.subcategories]
+# Canonical subcategory strings per primary_category (seeded from the live DB on 2026-09-22).
+# A null subcategory is allowed only for transfer.
+abnormal = ["pet_care"]
+business_expense = ["advertising", "web_hosting"]
+fixed_obligation = ["credit_card_interest", "home_security", "home_services", "insurance", "insurance_pet", "internet", "landscaping", "loan_payment", "mortgage", "pet_care", "phone", "property_fees", "recording_fee", "streaming", "subscriptions_apps", "utilities"]
+income = ["bonus", "check_deposit", "insurance_reimbursement", "interest", "paycheck", "payroll", "refund", "reimbursement", "stock_sale", "tax_refund"]
+investment = ["brokerage", "crypto"]
+medical = ["copay", "doctor", "durable_medical_equipment", "specialty_pharmacy", "vision"]
+rental = ["home_improvement", "mortgage", "rental_income"]
+tax = ["property_tax_vehicle", "state_tax", "tax_prep"]
+transfer = ["cash_deposit", "external_outbound"]
+variable_lifestyle = ["amazon", "auto", "beauty", "card_fee", "cash_withdrawal", "charity_donations", "clothing", "dining_out", "dry_cleaning", "entertainment", "fuel_charging", "gifts", "groceries", "household_goods", "intra_household", "jewelry", "office_supplies", "parking", "personal_care", "personal_services", "pet_adoption", "pet_care", "pet_grooming", "pet_license", "pharmacy_health", "political_contribution", "refund", "shopping_misc", "transportation", "travel", "vending"]
+
+# Known-benign signals. Each entry suppresses matching findings of ONE check. Mirrors the prose
+# list in STATUS.md. Amount / count / net fields are exact-match falsifiers: if the data no longer
+# matches them, the entry stops suppressing and is reported as stale.
+[[benign]]
+id = "acctverify-2026-07-15"
+check = "orphan_transfers"
+account_id = "acct-selfhelp-savings"
+occurred_on = "2026-07-15"
+description_pattern = "(?i)ally bank acctverify"
+expected_count = 3
+expected_net = 0.00
+status_ref = "STATUS benign 7"
+reason = "Ally micro-deposit account-verification probes, internal to one account."
+falsifier = "A fourth ACCTVERIFY row appears, or the three stop netting to 0.00."
+
+[[benign]]
+id = "axos-2026-02-12"
+check = "orphan_transfers"
+account_id = "acct-ally-hysa"
+occurred_on = "2026-02-12"
+description_pattern = "(?i)axos"
+amount = -100.00
+expected_count = 1
+status_ref = "STATUS benign 9 / DL-2026-09-14-C"
+reason = "Jeff's own Axos SBB account; not ingested, so the leg has no counterpart."
+falsifier = "Any second Axos row appears."
+
+[[benign]]
+id = "ally-checkpoint-2026-06-02"
+check = "stored_reconciliation"
+account_id = "acct-ally-hysa"
+period_end = "2026-06-02"
+variance = 2400.00
+status_ref = "STATUS checkpoint history"
+reason = "Known pre-6/2 Ally CSV gap, anchored by the 7/1 checkpoint."
+falsifier = "The variance changes from 2,400.00, or a later Ally checkpoint shows a nonzero variance."

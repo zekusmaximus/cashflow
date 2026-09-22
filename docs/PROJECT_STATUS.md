@@ -233,7 +233,7 @@ Tauri desktop app  (npm run tauri dev)
   └─ @tauri-apps/plugin-sql reads/writes the shared DB
 
 Python MCP server  (launched by Claude Desktop subprocess)
-  └─ 20 tools, 4 resources, 1 prompt
+  └─ 21 tools, 4 resources, 1 prompt
   └─ Same DB, write connection separate from read-only query connection
 
 Claude Cowork / Claude Desktop analyst project
@@ -305,7 +305,7 @@ Watch root: `C:\Users\Jeff\Documents\Cashflow` (set via
 - [x] Unpaired Ally HYSA `Requested transfer from …` rows auto-reclassified as `direction='inflow'` after the pairing pass (`ally_inbound_reclassified` reported in `PairTransfersResult`)
 
 ### MCP integration
-- [x] 20 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`, `upsert_balance_checkpoint`, `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`, `refresh_hysa_gate`, `compute_monthly_summary`, `generate_monthly_summary`, `compute_annual_summary`, `generate_annual_summary`, `ingest_check_register`, `ingest_check_deposit_ledger`, `list_lifecycle_audit_candidates`, `get_annual_reference`
+- [x] 21 tools registered: `read_document_metadata`, `ingest_documents`, `pair_transfers`, `reconcile_transactions`, `reconcile_periods`, `query_cashflow_data`, `upsert_transaction_override`, `upsert_balance_checkpoint`, `apply_classifier`, `upsert_classification_rule`, `list_classification_rules`, `refresh_hysa_gate`, `compute_monthly_summary`, `generate_monthly_summary`, `compute_annual_summary`, `generate_annual_summary`, `ingest_check_register`, `ingest_check_deposit_ledger`, `list_lifecycle_audit_candidates`, `get_annual_reference`, `verify_state`
 - [x] 4 resources: `docs://master-index`, `docs://tracker`, `docs://project-status`, `watch://recent-events`
 - [x] 1 spending-first prompt: `financial_detective`
 - [x] Wired to Claude Desktop via [`%APPDATA%\Claude\claude_desktop_config.json`](https://docs.anthropic.com)

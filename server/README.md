@@ -7,6 +7,13 @@ The server is a local-only bridge between the Cash Flow folder, the shared SQLit
 - `read_document_metadata(folder_path?)`: scans the local document folder, compares discovered files against the tracker CSV, and persists the latest document coverage snapshot.
 - `reconcile_transactions(request)`: validates an LLM-parsed transaction payload with Pydantic and upserts normalized rows into SQLite.
 - `query_cashflow_data(request)`: runs read-only SQL queries for summaries, anomaly checks, and downstream dashboard work.
+- `verify_state(request?)`: runs every post-ingest check in one call (integrity, rules, overrides,
+  completeness, balances, transfers, mortgage, summaries, labels) and returns pass / info / warn /
+  fail per check. Read-only against the database. Run it after `ingest_documents` →
+  `pair_transfers` → `reconcile_periods`. `{"write": true}` also writes `<watch_root>/STATUS_DATA.md`
+  and `<watch_root>/_state_exports/` (the overrides and rules CSVs, restorable with
+  `scripts/restore_state_from_export.py`); nothing else. Configured by `<watch_root>/verify_state.toml`
+  (template: `server/templates/verify_state.template.toml`).
 
 ## Ingestion behavior
 
