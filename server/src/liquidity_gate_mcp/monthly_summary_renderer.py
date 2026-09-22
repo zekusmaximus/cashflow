@@ -166,7 +166,8 @@ project — both this file and the structured JSON come from one compute pass._
 | **Delta vs. target** | **{fcf_h['delta_vs_target_pct']:+,.2f} pts** |
 
 Implied withholding is implied from the gap between the gross config and
-actual payroll deposits — `gross − tax_advantaged − payroll_inflows`.
+actual pay deposits (income rows with subcategory payroll, paycheck or bonus) —
+`gross − tax_advantaged − payroll_inflows`.
 
 ### Net-consumption view — true consumption (additive)
 
