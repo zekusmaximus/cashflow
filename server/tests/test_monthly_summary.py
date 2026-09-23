@@ -29,7 +29,6 @@ from liquidity_gate_mcp.monthly_summary_flags import (
     detect_abnormal_outflows,
     detect_discretionary_ceiling,
     detect_flags,
-    detect_hysa_delta_floor,
     detect_savings_rate_floor,
 )
 from liquidity_gate_mcp.monthly_summary_renderer import (
@@ -55,7 +54,6 @@ def _wealth_bridge(**overrides: object) -> WealthBridgeConfig:
         hysa_target=80000.0,
         savings_rate_target_pct=22.0,
         discretionary_ceiling_monthly=19000.0,
-        hysa_floor_monthly_delta=2500.0,
         savings_rate_floor_pct=18.0,
         abnormal_flag_threshold=3000.0,
         monthly_summary_output_dir="monthly_summaries",
@@ -237,27 +235,18 @@ def test_top_movers_filter_includes_and_excludes_correctly() -> None:
 
 
 def test_each_flag_detector_fires_individually() -> None:
-    hysa = detect_hysa_delta_floor(
-        FlagInputs(hysa_monthly_delta=1000.0, savings_rate_transactions_pct=99.0,
-                   discretionary_this_month=0.0)
-    )
-    assert hysa and hysa[0]["code"] == "hysa_delta_below_floor"
-
     savings = detect_savings_rate_floor(
-        FlagInputs(hysa_monthly_delta=99999.0, savings_rate_transactions_pct=10.0,
-                   discretionary_this_month=0.0)
+        FlagInputs(savings_rate_transactions_pct=10.0, discretionary_this_month=0.0)
     )
     assert savings and savings[0]["code"] == "savings_rate_below_floor"
 
     discretionary = detect_discretionary_ceiling(
-        FlagInputs(hysa_monthly_delta=99999.0, savings_rate_transactions_pct=99.0,
-                   discretionary_this_month=20000.0)
+        FlagInputs(savings_rate_transactions_pct=99.0, discretionary_this_month=20000.0)
     )
     assert discretionary and discretionary[0]["code"] == "discretionary_over_ceiling"
 
     abnormal = detect_abnormal_outflows(
         FlagInputs(
-            hysa_monthly_delta=99999.0,
             savings_rate_transactions_pct=99.0,
             discretionary_this_month=0.0,
             abnormal_txns=[{"merchant": "Roof Co", "amount": 5200.0, "date": "2026-05-09"}],
@@ -266,17 +255,15 @@ def test_each_flag_detector_fires_individually() -> None:
     assert abnormal and abnormal[0]["code"] == "abnormal_outflow"
 
 
-def test_detect_flags_fires_all_four_in_order() -> None:
+def test_detect_flags_fires_all_three_in_order() -> None:
     flags = detect_flags(
         FlagInputs(
-            hysa_monthly_delta=500.0,
             savings_rate_transactions_pct=5.0,
             discretionary_this_month=25000.0,
             abnormal_txns=[{"merchant": "Roof Co", "amount": 9000.0, "date": "2026-05-09"}],
         )
     )
     assert [f["code"] for f in flags] == [
-        "hysa_delta_below_floor",
         "savings_rate_below_floor",
         "discretionary_over_ceiling",
         "abnormal_outflow",
@@ -286,7 +273,6 @@ def test_detect_flags_fires_all_four_in_order() -> None:
 def test_no_flags_when_nothing_trips() -> None:
     flags = detect_flags(
         FlagInputs(
-            hysa_monthly_delta=9000.0,
             savings_rate_transactions_pct=30.0,
             discretionary_this_month=5000.0,
             abnormal_txns=[{"merchant": "Small", "amount": 100.0, "date": "2026-05-01"}],
@@ -570,6 +556,33 @@ def test_hysa_delta_is_account_scoped_all_categories(
     assert summary["hysa"]["balance"] == 53620.0
 
 
+def test_small_hysa_delta_is_reported_but_never_flagged(
+    database: DatabaseManager,
+) -> None:
+    # HYSA contributions are discretionary (no standing sweep), so a small or
+    # zero month is expected: the hysa block reports it, flags.auto stays quiet.
+    connection = database.connect()
+    try:
+        _seed_hysa_anchor(connection, closing=50000.0)
+        common = dict(account_id="acct-ally-hysa", occurred_on=date(2026, 8, 15))
+        _insert_tx(connection, **common, amount=1777.0, direction="transfer",
+                   primary_category="transfer", tx_id="h-xfer-in")
+        _insert_tx(connection, **common, amount=23.0, direction="inflow",
+                   primary_category="income", subcategory="interest", tx_id="h-int")
+        connection.commit()
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(database, _wealth_bridge(), 2026, 8)
+    assert summary["hysa"]["monthly_delta"] == 1800.0
+    assert summary["hysa"]["balance"] == 51800.0
+    assert summary["hysa"]["target"] == 80000.0
+    assert summary["hysa"]["gap"] == 28200.0
+    # The $23 interest is the month's only inflow, so the savings rate clears its
+    # floor and nothing else trips: a $1,800 HYSA month raises no flag at all.
+    assert summary["flags"]["auto"] == []
+
+
 # ---------------------------------------------------------------------------
 # Implied withholding never goes negative
 # ---------------------------------------------------------------------------
@@ -766,6 +779,21 @@ def test_config_loader_silent_when_401k_populated(tmp_path: Path) -> None:
     assert config.wealth_bridge.has_placeholder_401k is False
     assert placeholder_401k_warning(config.wealth_bridge) is None
     assert config.wealth_bridge.tax_advantaged_monthly == 1800 + 2400 + 583
+
+
+def test_config_loader_ignores_unknown_wealth_bridge_keys(tmp_path: Path) -> None:
+    # An older balances.toml may still carry keys the template has since
+    # dropped; they load silently instead of erroring.
+    (tmp_path / "balances.toml").write_text(
+        "[wealth_bridge]\n"
+        "hysa_target = 75000\n"
+        "retired_threshold = 1234.0\n",
+        encoding="utf-8",
+    )
+    config = load_balances(tmp_path)
+    assert config.wealth_bridge.hysa_target == 75000.0
+    assert not hasattr(config.wealth_bridge, "retired_threshold")
+    assert config.wealth_bridge.savings_rate_floor_pct == DEFAULT_WEALTH_BRIDGE.savings_rate_floor_pct
 
 
 def test_missing_file_uses_default_wealth_bridge(tmp_path: Path) -> None:

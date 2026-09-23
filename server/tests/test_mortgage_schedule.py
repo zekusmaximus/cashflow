@@ -111,7 +111,6 @@ def _wealth_bridge() -> WealthBridgeConfig:
         hysa_target=80000.0,
         savings_rate_target_pct=22.0,
         discretionary_ceiling_monthly=19000.0,
-        hysa_floor_monthly_delta=2500.0,
         savings_rate_floor_pct=18.0,
         abnormal_flag_threshold=3000.0,
         monthly_summary_output_dir="monthly_summaries",

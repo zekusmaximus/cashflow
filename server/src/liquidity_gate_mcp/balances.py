@@ -33,7 +33,6 @@ class WealthBridgeConfig:
     hysa_target: float
     savings_rate_target_pct: float
     discretionary_ceiling_monthly: float
-    hysa_floor_monthly_delta: float
     savings_rate_floor_pct: float
     abnormal_flag_threshold: float
     monthly_summary_output_dir: str
@@ -60,7 +59,6 @@ DEFAULT_WEALTH_BRIDGE = WealthBridgeConfig(
     hysa_target=80000.0,
     savings_rate_target_pct=22.0,
     discretionary_ceiling_monthly=19000.0,
-    hysa_floor_monthly_delta=2500.0,
     savings_rate_floor_pct=18.0,
     abnormal_flag_threshold=3000.0,
     monthly_summary_output_dir="monthly_summaries",
@@ -326,7 +324,9 @@ def _parse_wealth_bridge(section: dict) -> WealthBridgeConfig:
 
     Every key falls back to ``DEFAULT_WEALTH_BRIDGE`` so a partial section (or
     a stale file written before this section existed) still yields a usable
-    config rather than raising.
+    config rather than raising. Keys this parser does not read — including ones
+    since retired from the template — are ignored, so an older file never fails
+    to load.
     """
     d = DEFAULT_WEALTH_BRIDGE
 
@@ -354,9 +354,6 @@ def _parse_wealth_bridge(section: dict) -> WealthBridgeConfig:
         ),
         discretionary_ceiling_monthly=num(
             "discretionary_ceiling_monthly", d.discretionary_ceiling_monthly
-        ),
-        hysa_floor_monthly_delta=num(
-            "hysa_floor_monthly_delta", d.hysa_floor_monthly_delta
         ),
         savings_rate_floor_pct=num(
             "savings_rate_floor_pct", d.savings_rate_floor_pct
