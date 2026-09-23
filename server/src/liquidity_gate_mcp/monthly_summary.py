@@ -728,11 +728,9 @@ def compute_monthly_summary(
     ]
     auto_flags = detect_flags(
         FlagInputs(
-            hysa_monthly_delta=monthly_delta,
             savings_rate_transactions_pct=savings_rate_txn,
             discretionary_this_month=discretionary_this,
             abnormal_txns=abnormal_txns,
-            hysa_floor=wealth_bridge.hysa_floor_monthly_delta,
             savings_rate_floor=wealth_bridge.savings_rate_floor_pct,
             discretionary_ceiling=wealth_bridge.discretionary_ceiling_monthly,
             abnormal_threshold=wealth_bridge.abnormal_flag_threshold,
