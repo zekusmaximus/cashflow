@@ -1618,11 +1618,20 @@ def _reconciliation_findings(ctx: _Context) -> dict[str, Any]:
                 else:
                     passes.append(f"{account_id}@{d}")
 
-        # Credit cards: info only.
+        # Credit cards: the balance is the amount owed, positive = owed
+        # (DL-2026-09-22-E), in the reconciliation chain and v_computed_balance
+        # alike. Two checks against the as-of month's full-month row:
+        #   (a) a negative close is a credit — for this household a wrong seed
+        #       or missing charges, never a real result;
+        #   (b) the view must equal that close rolled forward to today by the
+        #       same owed-signed rules the view uses, so a stale chain or an
+        #       anchor row that drifted from balances.toml shows up here.
+        today = ctx.today.isoformat()
         for account_id, account in ctx.accounts.items():
             if account["account_type"] != "credit_card":
                 continue
             row = None
+            end = None
             if as_of is not None:
                 start, end = _month_start(as_of).isoformat(), _month_end(as_of).isoformat()
                 row = next(
@@ -1634,13 +1643,59 @@ def _reconciliation_findings(ctx: _Context) -> dict[str, Any]:
                 "SELECT computed_balance, anchor_date FROM v_computed_balance WHERE account_id = ?",
                 (account_id,),
             ).fetchone()
-            info.append(
-                {"account_id": account_id, "level": "info", "kind": "credit_card",
-                 "as_of_month": as_of,
-                 "chain_close": None if row is None else row["computed_closing_balance"],
-                 "v_computed_balance": None if view is None else view["computed_balance"],
-                 "note": "reported side by side; the view's liability sign convention is a Cowork decision"}
-            )
+            chain_close = None if row is None else row["computed_closing_balance"]
+            view_balance = None if view is None else view["computed_balance"]
+            card = {"account_id": account_id, "kind": "credit_card", "as_of_month": as_of,
+                    "chain_close": chain_close, "v_computed_balance": view_balance}
+            if as_of is None:
+                info.append({**card, "level": "info", "note": "no as-of month; balance not checked"})
+                continue
+            if view_balance is None or (row is not None and chain_close is None):
+                info.append({**card, "level": "info", "note": "no opening seed; balance unknown"})
+                continue
+            if row is None:
+                info.append({**card, "level": "info",
+                             "note": "no full-month reconciliation_periods row for the as-of month; "
+                                     "balance not checked (run reconcile_periods)"})
+                continue
+            base = {**card, "period_end": end}
+            chain_cents = _cents(chain_close)
+            clean = True
+            if chain_cents < 0:
+                clean = False
+                findings.append({**base, "variance": None,
+                                 "problem": "card balance is negative (a credit): check the opening seed "
+                                            "in balances.toml or look for missing charges (DL-2026-09-22-E)"})
+            if view["anchor_date"] is not None and view["anchor_date"] > end:
+                # The view anchors on a statement closing after the as-of month;
+                # rolling the chain forward from here would not reach that anchor.
+                info.append({**card, "level": "info", "anchor_date": view["anchor_date"],
+                             "note": "v_computed_balance anchors after the as-of month end; "
+                                     "view-vs-chain check skipped"})
+                continue
+            owed_after = 0
+            for tx in ctx.by_account.get(account_id, []):
+                if not end < tx.occurred_on <= today:
+                    continue
+                if tx.direction == "outflow":
+                    owed_after += abs(tx.cents)
+                elif tx.direction == "inflow":
+                    owed_after -= abs(tx.cents)
+                elif tx.direction == "transfer":
+                    owed_after -= tx.cents
+            expected_cents = chain_cents + owed_after
+            diff_cents = _cents(view_balance) - expected_cents
+            if diff_cents != 0:
+                clean = False
+                findings.append({**base, "variance": _dollars(diff_cents),
+                                 "expected_v_computed_balance": _dollars(expected_cents),
+                                 "problem": f"v_computed_balance differs from the reconciliation chain by "
+                                            f"{_fmt(abs(diff_cents))}: stale reconciliation_periods rows, "
+                                            f"or an anchor that no longer matches balances.toml"})
+            if clean:
+                passes.append(account_id)
+                info.append({**card, "level": "info",
+                             "note": "amount owed; v_computed_balance agrees with the reconciliation chain"})
         return {"findings": findings, "info": info, "passes": passes}
 
     return ctx.cached("reconciliation", compute)
@@ -1666,8 +1721,8 @@ def check_stored_reconciliation(ctx: _Context) -> _Outcome:
     details = open_findings + suppressed + analysis["info"]
     cards = len(analysis["info"])
     summary_tail = (
-        f"{len(analysis['passes'])} rows/checkpoints agree, {len(suppressed)} benign-suppressed, "
-        f"{cards} credit cards reported (info)"
+        f"{len(analysis['passes'])} rows/checkpoints/cards agree, {len(suppressed)} benign-suppressed, "
+        f"{cards} credit-card notes (info)"
     )
     if open_findings:
         return _Outcome("warn", f"{len(open_findings)} reconciliation problems; " + summary_tail,

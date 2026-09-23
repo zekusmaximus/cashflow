@@ -71,6 +71,13 @@ SPEND_OFFSET_CATEGORIES: tuple[str, ...] = (
     "fixed_obligation",
 )
 
+# Pay deposits — the take-home side of `gross_household_income_monthly`, which
+# covers both earners including Jeff's quarterly bonuses (DL-2026-09-22-F).
+# `income` inflows with one of these subcategories are subtracted from gross in
+# the theoretical view's implied withholding. check_deposit / reimbursement /
+# refund / tax_refund / interest / stock_sale are not pay and stay out.
+PAY_DEPOSIT_SUBCATEGORIES: tuple[str, ...] = ("payroll", "paycheck", "bonus")
+
 # Scheduled-mortgage identification tolerance, applied as floor-plus-excess
 # against the scheduled payment in effect for the row's date (the
 # `[[mortgage.ion.schedule]]` tier, or the flat `scheduled_payment`):
@@ -632,12 +639,14 @@ def compute_monthly_summary(
         )
 
         # --- Section 2: theoretical view ------------------------------------
+        pay_placeholders = ",".join("?" * len(PAY_DEPOSIT_SUBCATEGORIES))
         payroll_inflows = _scalar(
             connection,
-            "SELECT COALESCE(SUM(amount), 0) AS v FROM transactions "
-            "WHERE direction = 'inflow' AND subcategory = 'payroll' "
-            "AND occurred_on >= ? AND occurred_on < ?",
-            (month_start, next_month_start),
+            f"SELECT COALESCE(SUM(amount), 0) AS v FROM transactions "
+            f"WHERE primary_category = 'income' AND direction = 'inflow' "
+            f"AND subcategory IN ({pay_placeholders}) "
+            f"AND occurred_on >= ? AND occurred_on < ?",
+            (*PAY_DEPOSIT_SUBCATEGORIES, month_start, next_month_start),
         )
         investment_outflows = _scalar(
             connection,
@@ -731,15 +740,18 @@ def compute_monthly_summary(
     )
     if implied_withholding_floored:
         # Internal review flag — implied withholding would have been negative,
-        # meaning gross config understates actual payroll deposits.
+        # meaning gross config understates actual pay deposits (expected in a
+        # bonus month).
         auto_flags.append(
             {
                 "code": "implied_withholding_negative",
                 "message": (
                     f"Implied withholding computed negative (gross "
                     f"${gross_monthly:,.0f} − tax-advantaged ${tax_advantaged:,.0f} "
-                    f"− payroll deposits ${payroll_inflows:,.0f}); floored to $0. "
-                    f"Reconcile the gross config against actual payroll deposits."
+                    f"− pay deposits (payroll, paycheck, bonus) "
+                    f"${payroll_inflows:,.0f}); floored to $0. "
+                    f"Reconcile the gross config against actual pay deposits "
+                    f"(payroll, paycheck, bonus)."
                 ),
                 "severity": "warn",
             }

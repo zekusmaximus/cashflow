@@ -348,14 +348,30 @@ ORDER BY month;
 -- seeded as Dec-2025 rows (see computed_balance.seed_balance_anchors), so they
 -- serve as the fallback anchor until a real monthly statement is recorded.
 -- net_since_anchor sums every transaction strictly after the anchor date
--- through today: inflows (+), outflows (-), and transfers by their stored
--- signed amount. All three directions count — each row is real money moving
--- on that account, so a transfer in or out shifts the balance exactly like
--- any other posting. (Excluding transfers belongs in spending analysis, where
--- inter-account moves would otherwise double-count as spending — not in a
--- balance view.) Accounts with no anchor at all (e.g. Citi, untracked at
+-- through today, and computed_balance = anchor_balance + net_since_anchor for
+-- every account type. All three directions count — each row is real money
+-- moving on that account, so a transfer in or out shifts the balance exactly
+-- like any other posting. (Excluding transfers belongs in spending analysis,
+-- where inter-account moves would otherwise double-count as spending — not in
+-- a balance view.) Accounts with no anchor at all (e.g. Citi, untracked at
 -- 2025-12-31) return NULL for the computed columns.
-CREATE VIEW IF NOT EXISTS v_computed_balance AS
+--
+-- Sign convention (DL-2026-09-22-E):
+--   * Cash accounts (checking, savings): the balance is money held. Inflows
+--     (+ABS), outflows (-ABS), transfers by their stored signed amount.
+--   * Credit cards (accounts.account_type = 'credit_card'): the balance is the
+--     amount OWED, positive = owed, matching the balances.toml opening seed and
+--     reconcile_periods (closing = opening - net_signed). The cash-signed net
+--     is negated: charges (outflow) raise the balance (+ABS), refunds and
+--     statement credits (inflow) lower it (-ABS), and payments (transfer, stored
+--     positive) lower it (-amount). A negative card balance is a credit, which
+--     for this household means a wrong seed or missing charges; verify_state
+--     reports it.
+-- CREATE VIEW IF NOT EXISTS will not replace an existing view, and
+-- DatabaseManager.initialize() re-runs this file at every startup, so drop
+-- first to pick up definition changes on an existing database.
+DROP VIEW IF EXISTS v_computed_balance;
+CREATE VIEW v_computed_balance AS
 SELECT
   a.id AS account_id,
   anchor.anchor_date AS anchor_date,
@@ -371,7 +387,8 @@ SELECT
      WHERE t.account_id = a.id
        AND t.occurred_on > anchor.anchor_date
        AND t.occurred_on <= DATE('now', 'localtime')
-  ), 0), 2) END AS net_since_anchor,
+  ), 0) * CASE WHEN a.account_type = 'credit_card' THEN -1 ELSE 1 END, 2)
+  END AS net_since_anchor,
   CASE WHEN anchor.anchor_date IS NULL THEN NULL ELSE ROUND(anchor.anchor_balance + COALESCE((
     SELECT SUM(CASE
                  WHEN t.direction = 'inflow'   THEN ABS(t.amount)
@@ -383,7 +400,8 @@ SELECT
      WHERE t.account_id = a.id
        AND t.occurred_on > anchor.anchor_date
        AND t.occurred_on <= DATE('now', 'localtime')
-  ), 0), 2) END AS computed_balance,
+  ), 0) * CASE WHEN a.account_type = 'credit_card' THEN -1 ELSE 1 END, 2)
+  END AS computed_balance,
   DATE('now', 'localtime') AS as_of_date
 FROM accounts a
 LEFT JOIN (

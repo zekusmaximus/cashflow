@@ -378,12 +378,14 @@ def test_seed_never_overwrites_a_real_closing(
             account_name="HYSA",
             account_type="savings",
         )
-        # A real reconciled statement closing already on the books.
+        # A real reconciled statement closing already on the books. (A
+        # balances_toml-sourced closing is a copy of config and follows it;
+        # see test_seed_updates_a_toml_sourced_anchor_when_the_toml_changes.)
         connection.execute(
             "INSERT INTO reconciliation_periods (id, account_id, period_start, "
             "period_end, statement_opening_balance, statement_closing_balance, "
             "closing_balance_source) VALUES ('recon-real', 'acct-ally-hysa', "
-            "'2025-12-01', '2025-12-31', NULL, 2500.00, 'balances_toml')"
+            "'2025-12-01', '2025-12-31', NULL, 2500.00, 'metadata_running_balance')"
         )
         connection.commit()
     finally:
@@ -429,3 +431,267 @@ def test_seed_balance_anchors_is_idempotent(
         assert count["n"] == 1
     finally:
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Credit cards: balance is the amount owed (DL-2026-09-22-E)
+# ---------------------------------------------------------------------------
+
+
+def _seed_anchor_scenario(
+    database: DatabaseManager, tmp_path: Path, *, account_id: str, account_type: str
+) -> None:
+    """A 1,000.00 Dec-2025 anchor, then a -200 charge-shaped outflow, a +300
+    transfer and a +50 inflow after it."""
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id=account_id,
+            institution="Chase" if account_type == "credit_card" else "Beacon",
+            account_name="Test",
+            account_type=account_type,
+        )
+        for day, amount, direction, suffix in (
+            (5, -200.0, "outflow", "charge"),
+            (10, 300.0, "transfer", "payment"),
+            (15, 50.0, "inflow", "refund"),
+        ):
+            _insert_tx(
+                connection,
+                account_id=account_id,
+                occurred_on=date(2026, 1, day),
+                amount=amount,
+                direction=direction,
+                tx_id=f"{account_id}-{suffix}",
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    seed_balance_anchors(
+        database,
+        _balances_with(tmp_path, f'[opening_balances]\n"{account_id}" = 1000.00\n'),
+    )
+
+
+def test_view_reports_a_credit_card_as_amount_owed(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    _seed_anchor_scenario(
+        database, tmp_path, account_id="acct-chase-credit-card", account_type="credit_card"
+    )
+    row = _view_row(database, "acct-chase-credit-card")
+    assert row["anchor_date"] == "2025-12-31"
+    assert row["anchor_balance"] == 1000.0
+    # Charge +200 owed, payment -300, refund -50.
+    assert row["net_since_anchor"] == -150.0
+    assert row["computed_balance"] == 850.0
+    assert row["computed_balance"] == row["anchor_balance"] + row["net_since_anchor"]
+
+
+def test_view_keeps_cash_signs_for_a_checking_account(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    _seed_anchor_scenario(
+        database, tmp_path, account_id="acct-beacon-checking", account_type="checking"
+    )
+    row = _view_row(database, "acct-beacon-checking")
+    # Outflow -200, transfer in +300, inflow +50: unchanged from before the
+    # card sign convention.
+    assert row["net_since_anchor"] == 150.0
+    assert row["computed_balance"] == 1150.0
+
+
+# The v_computed_balance definition before DL-2026-09-22-E, verbatim: cash
+# signs for every account type, declared IF NOT EXISTS.
+_OLD_VIEW_SQL = """
+CREATE VIEW IF NOT EXISTS v_computed_balance AS
+SELECT
+  a.id AS account_id,
+  anchor.anchor_date AS anchor_date,
+  anchor.anchor_balance AS anchor_balance,
+  CASE WHEN anchor.anchor_date IS NULL THEN NULL ELSE ROUND(COALESCE((
+    SELECT SUM(CASE
+                 WHEN t.direction = 'inflow'   THEN ABS(t.amount)
+                 WHEN t.direction = 'outflow'  THEN -ABS(t.amount)
+                 WHEN t.direction = 'transfer' THEN t.amount
+                 ELSE 0
+               END)
+      FROM transactions t
+     WHERE t.account_id = a.id
+       AND t.occurred_on > anchor.anchor_date
+       AND t.occurred_on <= DATE('now', 'localtime')
+  ), 0), 2) END AS net_since_anchor,
+  CASE WHEN anchor.anchor_date IS NULL THEN NULL ELSE ROUND(anchor.anchor_balance + COALESCE((
+    SELECT SUM(CASE
+                 WHEN t.direction = 'inflow'   THEN ABS(t.amount)
+                 WHEN t.direction = 'outflow'  THEN -ABS(t.amount)
+                 WHEN t.direction = 'transfer' THEN t.amount
+                 ELSE 0
+               END)
+      FROM transactions t
+     WHERE t.account_id = a.id
+       AND t.occurred_on > anchor.anchor_date
+       AND t.occurred_on <= DATE('now', 'localtime')
+  ), 0), 2) END AS computed_balance,
+  DATE('now', 'localtime') AS as_of_date
+FROM accounts a
+LEFT JOIN (
+  SELECT rp.account_id,
+         rp.period_end AS anchor_date,
+         rp.statement_closing_balance AS anchor_balance
+    FROM reconciliation_periods rp
+   WHERE rp.statement_closing_balance IS NOT NULL
+     AND NOT EXISTS (
+           SELECT 1
+             FROM reconciliation_periods rp2
+            WHERE rp2.account_id = rp.account_id
+              AND rp2.statement_closing_balance IS NOT NULL
+              AND rp2.period_end > rp.period_end
+         )
+) anchor ON anchor.account_id = a.id;
+"""
+
+
+def test_initialize_replaces_an_existing_old_view_definition(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    connection = database.connect()
+    try:
+        connection.execute("DROP VIEW v_computed_balance")
+        connection.executescript(_OLD_VIEW_SQL)
+        connection.commit()
+    finally:
+        connection.close()
+    _seed_anchor_scenario(
+        database, tmp_path, account_id="acct-chase-credit-card", account_type="credit_card"
+    )
+    # The live DB as it stood: the card is reported with cash signs.
+    assert _view_row(database, "acct-chase-credit-card")["computed_balance"] == 1150.0
+
+    # Startup re-runs schema.sql; the view must be replaced, not kept.
+    database.initialize()
+
+    row = _view_row(database, "acct-chase-credit-card")
+    assert row["net_since_anchor"] == -150.0
+    assert row["computed_balance"] == 850.0
+
+
+# ---------------------------------------------------------------------------
+# balances.toml-sourced anchor rows follow balances.toml
+# ---------------------------------------------------------------------------
+
+
+def _period_rows(database: DatabaseManager, account_id: str) -> dict[str, sqlite3.Row]:
+    connection = database.connect(read_only=True)
+    try:
+        return {
+            row["period_start"] + ".." + row["period_end"]: row
+            for row in connection.execute(
+                "SELECT * FROM reconciliation_periods WHERE account_id = ?",
+                (account_id,),
+            ).fetchall()
+        }
+    finally:
+        connection.close()
+
+
+def test_seed_updates_a_toml_sourced_anchor_when_the_toml_changes(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    connection = database.connect()
+    try:
+        _seed_account(
+            connection,
+            account_id="acct-ally-hysa",
+            institution="Ally",
+            account_name="HYSA",
+            account_type="savings",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    body = '[opening_balances]\nally = {opening}\n\n[statement_closings.ally]\n"2026-03-01" = {closing}\n'
+    assert seed_balance_anchors(
+        database, _balances_with(tmp_path, body.format(opening="100.00", closing="400.00"))
+    ) == 2
+
+    # Something else on the row (a human note) must survive the update.
+    connection = database.connect()
+    try:
+        connection.execute(
+            "UPDATE reconciliation_periods SET variance_explanation = 'kept' "
+            "WHERE account_id = 'acct-ally-hysa'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    updated = seed_balance_anchors(
+        database, _balances_with(tmp_path, body.format(opening="200.00", closing="450.00"))
+    )
+    assert updated == 2
+
+    rows = _period_rows(database, "acct-ally-hysa")
+    assert len(rows) == 2
+    opening = rows["2025-12-01..2025-12-31"]
+    assert opening["statement_closing_balance"] == 200.0
+    assert opening["closing_balance_source"] == "balances_toml_opening"
+    assert opening["variance_explanation"] == "kept"
+    closing = rows["2026-03-01..2026-03-01"]
+    assert closing["statement_closing_balance"] == 450.0
+    assert closing["closing_balance_source"] == "balances_toml"
+    assert closing["variance_explanation"] == "kept"
+
+    # Unchanged config writes nothing.
+    assert seed_balance_anchors(
+        database, _balances_with(tmp_path, body.format(opening="200.00", closing="450.00"))
+    ) == 0
+
+
+def test_seed_never_overwrites_checkpoint_or_running_balance_closings(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    connection = database.connect()
+    try:
+        for account_id, institution in (
+            ("acct-ally-hysa", "Ally"),
+            ("acct-beacon-checking", "Beacon"),
+        ):
+            _seed_account(
+                connection,
+                account_id=account_id,
+                institution=institution,
+                account_name="Test",
+                account_type="savings" if institution == "Ally" else "checking",
+            )
+        # Reconciliation evidence at exactly the keys the seed would write.
+        connection.execute(
+            "INSERT INTO reconciliation_periods (id, account_id, period_start, "
+            "period_end, statement_closing_balance, closing_balance_source) VALUES "
+            "('ally-checkpoint', 'acct-ally-hysa', '2026-06-01', '2026-06-02', "
+            "12320.00, 'checkpoint')"
+        )
+        connection.execute(
+            "INSERT INTO reconciliation_periods (id, account_id, period_start, "
+            "period_end, statement_closing_balance, closing_balance_source) VALUES "
+            "('beacon-dec', 'acct-beacon-checking', '2025-12-01', '2025-12-31', "
+            "5000.00, 'metadata_running_balance')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    body = (
+        '[opening_balances]\n"acct-beacon-checking" = 4000.00\n\n'
+        '[statement_closings.ally]\n"2026-06-02" = 99999.00\n'
+    )
+    seed_balance_anchors(database, _balances_with(tmp_path, body))
+
+    ally = _period_rows(database, "acct-ally-hysa")["2026-06-01..2026-06-02"]
+    assert ally["statement_closing_balance"] == 12320.00
+    assert ally["closing_balance_source"] == "checkpoint"
+    beacon = _period_rows(database, "acct-beacon-checking")["2025-12-01..2025-12-31"]
+    assert beacon["statement_closing_balance"] == 5000.00
+    assert beacon["closing_balance_source"] == "metadata_running_balance"

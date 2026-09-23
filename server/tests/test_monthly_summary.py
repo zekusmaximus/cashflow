@@ -596,6 +596,68 @@ def test_implied_withholding_floors_at_zero_and_flags(
     assert "implied_withholding_negative" in codes
 
 
+def test_implied_withholding_counts_every_pay_deposit(
+    database: DatabaseManager,
+) -> None:
+    # DL-2026-09-22-F: payroll (Ashley), paycheck (Jeff's monthly check) and
+    # bonus (Jeff's bonuses) are all pay deposits; check deposits and
+    # reimbursements are not, and neither is a non-income row tagged 'payroll'.
+    connection = database.connect()
+    try:
+        _seed_account(connection)
+        for tx_id, amount, category, subcategory in (
+            ("pay-payroll", 1000.0, "income", "payroll"),
+            ("pay-paycheck", 500.0, "income", "paycheck"),
+            ("pay-bonus", 200.0, "income", "bonus"),
+            ("not-check-deposit", 300.0, "income", "check_deposit"),
+            ("not-reimbursement", 50.0, "income", "reimbursement"),
+            ("not-income", 400.0, "transfer", "payroll"),
+        ):
+            _insert_tx(connection, account_id="acct-beacon-1234",
+                       occurred_on=date(2026, 5, 15), amount=amount, direction="inflow",
+                       primary_category=category, subcategory=subcategory, tx_id=tx_id)
+        # Outside the month window: never counted.
+        _insert_tx(connection, account_id="acct-beacon-1234",
+                   occurred_on=date(2026, 6, 1), amount=900.0, direction="inflow",
+                   primary_category="income", subcategory="bonus", tx_id="june-bonus")
+        connection.commit()
+    finally:
+        connection.close()
+
+    wealth_bridge = _wealth_bridge()
+    summary = compute_monthly_summary(database, wealth_bridge, 2026, 5)
+    payroll_inflows = 1700.0
+    expected = round(
+        wealth_bridge.gross_household_income_monthly
+        - wealth_bridge.tax_advantaged_monthly
+        - payroll_inflows,
+        2,
+    )
+    assert summary["fcf_theoretical"]["implied_withholding"] == pytest.approx(expected)
+    codes = {f["code"] for f in summary["flags"]["auto"]}
+    assert "implied_withholding_negative" not in codes
+
+
+def test_implied_withholding_flag_names_all_pay_deposits(
+    database: DatabaseManager,
+) -> None:
+    connection = database.connect()
+    try:
+        _seed_account(connection)
+        # A bonus month: the bonus alone pushes the raw figure below zero.
+        _insert_tx(connection, account_id="acct-beacon-1234",
+                   occurred_on=date(2026, 5, 15), amount=60000.0, direction="inflow",
+                   primary_category="income", subcategory="bonus", tx_id="big-bonus")
+        connection.commit()
+    finally:
+        connection.close()
+
+    summary = compute_monthly_summary(database, _wealth_bridge(), 2026, 5)
+    assert summary["fcf_theoretical"]["implied_withholding"] == 0.0
+    [flag] = [f for f in summary["flags"]["auto"] if f["code"] == "implied_withholding_negative"]
+    assert "pay deposits (payroll, paycheck, bonus) $60,000" in flag["message"]
+
+
 # ---------------------------------------------------------------------------
 # Manual notes block preservation
 # ---------------------------------------------------------------------------

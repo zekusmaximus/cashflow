@@ -15,9 +15,11 @@ from liquidity_gate_mcp import verify_state as vs
 from liquidity_gate_mcp.annual_summary import compute_annual_summary
 from liquidity_gate_mcp.annual_summary_renderer import render_annual_markdown
 from liquidity_gate_mcp.balances import load_balances
-from liquidity_gate_mcp.models import VerifyStateRequest
+from liquidity_gate_mcp.computed_balance import seed_balance_anchors
+from liquidity_gate_mcp.models import ReconcilePeriodsRequest, VerifyStateRequest
 from liquidity_gate_mcp.monthly_summary import compute_monthly_summary
 from liquidity_gate_mcp.monthly_summary_renderer import render_markdown
+from liquidity_gate_mcp.reconciliation import reconcile_periods
 from liquidity_gate_mcp.tools import (
     MATCH_THRESHOLD,
     load_tracker_rows,
@@ -412,6 +414,125 @@ def test_stored_reconciliation_baseline_suppresses_the_known_ally_variance(fx: F
     [card] = [d for d in check.details if d.get("kind") == "credit_card"]
     assert card["account_id"] == CHASE and card["level"] == "info"
     assert set(card) >= {"chain_close", "v_computed_balance"}
+    # 7,500.00 owed + 311.17 of charges - 7,000.00 of payments.
+    assert card["chain_close"] == pytest.approx(811.17)
+    assert card["v_computed_balance"] == pytest.approx(811.17)
+
+
+def _card_details(check) -> list[dict]:
+    return [d for d in check.details if d.get("kind") == "credit_card"]
+
+
+def _card_findings(check) -> list[dict]:
+    return [d for d in _card_details(check) if "problem" in d]
+
+
+def _reseed_and_reconcile(fx: Fixture) -> None:
+    balances = load_balances(fx.watch_root)
+    seed_balance_anchors(fx.database, balances)
+    reconcile_periods(
+        fx.database,
+        balances,
+        ReconcilePeriodsRequest(period_start=date(2026, 1, 1), period_end=date(2026, 8, 31)),
+    )
+
+
+def test_stored_reconciliation_fires_on_a_negative_card_balance(fx: Fixture) -> None:
+    # A 500.00 seed cannot absorb August's 7,000.00 of payments: the chain
+    # closes August as a credit. The anchor row follows balances.toml, so the
+    # view agrees with the chain and only the negative-balance check fires.
+    fx.write_balances(BALANCES_TOML.replace(f'"{CHASE}" = 7500.00', f'"{CHASE}" = 500.00'))
+    _reseed_and_reconcile(fx)
+    check = fx.check("stored_reconciliation")
+    assert check.status == "warn"
+    [finding] = _card_findings(check)
+    assert (finding["account_id"], finding["period_end"]) == (CHASE, "2026-08-31")
+    assert finding["problem"] == (
+        "card balance is negative (a credit): check the opening seed in balances.toml "
+        "or look for missing charges (DL-2026-09-22-E)"
+    )
+    assert finding["chain_close"] == pytest.approx(-6188.83)
+    assert finding["v_computed_balance"] == pytest.approx(-6188.83)
+
+
+def test_stored_reconciliation_fires_when_the_card_view_disagrees_with_the_chain(fx: Fixture) -> None:
+    # The live 2026-09-22 shape: the Dec-2025 anchor row still carries an old
+    # seed while balances.toml (and so the chain) has the corrected one.
+    fx.execute(
+        "UPDATE reconciliation_periods SET statement_closing_balance = 7400.00 "
+        "WHERE account_id = ? AND period_end = '2025-12-31'",
+        (CHASE,),
+    )
+    check = fx.check("stored_reconciliation")
+    assert check.status == "warn"
+    [finding] = _card_findings(check)
+    assert (finding["account_id"], finding["period_end"]) == (CHASE, "2026-08-31")
+    assert finding["problem"] == (
+        "v_computed_balance differs from the reconciliation chain by $100.00: stale "
+        "reconciliation_periods rows, or an anchor that no longer matches balances.toml"
+    )
+    assert finding["chain_close"] == pytest.approx(811.17)
+    assert finding["v_computed_balance"] == pytest.approx(711.17)
+    assert finding["variance"] == pytest.approx(-100.0)
+
+    # Startup's seed_balance_anchors puts the anchor back on balances.toml.
+    seed_balance_anchors(fx.database, load_balances(fx.watch_root))
+    check = fx.check("stored_reconciliation")
+    assert check.status == "pass" and not _card_findings(check)
+
+
+def test_stored_reconciliation_card_check_rolls_forward_and_catches_a_stale_chain(fx: Fixture) -> None:
+    # Rows after the as-of month end roll the chain forward by the view's
+    # owed-signed rules: charge +40, refund -10, payment -100.
+    fx.insert(Row("c10", CHASE, "2026-09-05", -40.00, "outflow", "WHOLEFDS #123", "variable_lifestyle",
+                  "groceries", merchant="Whole Foods"))
+    fx.insert(Row("c11", CHASE, "2026-09-06", 10.00, "inflow", "WHOLEFDS REFUND", "variable_lifestyle",
+                  "groceries", merchant="Whole Foods"))
+    fx.insert(Row("c12", CHASE, "2026-09-10", 100.00, "transfer", "Payment Thank You-Mobile", "transfer"))
+    check = fx.check("stored_reconciliation", month="2026-08")
+    assert check.status == "pass" and not _card_findings(check)
+    [card] = _card_details(check)
+    assert card["chain_close"] == pytest.approx(811.17)
+    assert card["v_computed_balance"] == pytest.approx(741.17)
+
+    # An August charge landing after the last reconcile: the view has it, the
+    # stored chain does not.
+    fx.insert(Row("c13", CHASE, "2026-08-30", -25.00, "outflow", "UBER TRIP", "variable_lifestyle",
+                  "transportation", merchant="Uber"))
+    check = fx.check("stored_reconciliation", month="2026-08")
+    assert check.status == "warn"
+    [finding] = _card_findings(check)
+    assert "differs from the reconciliation chain by $25.00" in finding["problem"]
+    assert finding["variance"] == pytest.approx(25.0)
+
+
+def test_stored_reconciliation_card_without_a_seed_stays_info(fx: Fixture) -> None:
+    fx.execute(
+        "INSERT INTO accounts (id, institution, account_name, account_type, owner) "
+        "VALUES ('acct-citi-credit-card', 'Citi', 'Credit Card', 'credit_card', 'joint')"
+    )
+    fx.insert(Row("citi01", "acct-citi-credit-card", "2026-08-12", -75.00, "outflow", "COSTCO",
+                  "variable_lifestyle", "groceries", merchant="Costco"), file="2026-08_Citi.csv")
+    _reseed_and_reconcile(fx)
+    check = fx.check("stored_reconciliation")
+    assert check.status == "pass"
+    [citi] = [d for d in _card_details(check) if d["account_id"] == "acct-citi-credit-card"]
+    assert citi["level"] == "info" and "problem" not in citi
+    assert citi["note"] == "no opening seed; balance unknown"
+    assert citi["chain_close"] is None and citi["v_computed_balance"] is None
+
+
+def test_stored_reconciliation_skips_the_view_check_when_the_card_anchor_is_newer(fx: Fixture) -> None:
+    # A Chase statement closing after the as-of month moves the view's anchor
+    # past it; the chain cannot be rolled forward to that anchor.
+    fx.write_balances(BALANCES_TOML + f'\n[statement_closings."{CHASE}"]\n"2026-09-15" = 999.99\n')
+    seed_balance_anchors(fx.database, load_balances(fx.watch_root))
+    check = fx.check("stored_reconciliation")
+    assert check.status == "pass" and not _card_findings(check)
+    [card] = _card_details(check)
+    assert card["level"] == "info" and card["anchor_date"] == "2026-09-15"
+    assert card["chain_close"] == pytest.approx(811.17)
+    assert card["v_computed_balance"] == pytest.approx(999.99)
 
 
 def test_stored_reconciliation_fires_on_a_self_anchoring_variance_or_stale_row(fx: Fixture) -> None:
